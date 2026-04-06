@@ -14,7 +14,8 @@ const config = {
 
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_MODEL || 'gpt-4-turbo-preview',
+    // Free OpenRouter model — see https://openrouter.ai/models?q=free
+    model: process.env.OPENAI_MODEL || 'meta-llama/llama-3.1-8b-instruct:free',
   },
 
   supabase: {
