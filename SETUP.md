@@ -133,7 +133,7 @@ This is the most involved step. Follow carefully.
 3. Under **Step 1 — Select a phone number**, you'll see a free test number provided by Meta. Note this number — it's for testing.
 4. Under **Step 2 — Send and receive messages**, you'll see:
    - **Phone Number ID** → copy this → `WHATSAPP_PHONE_NUMBER_ID`
-   - **WhatsApp Business Account ID** → copy this → `WHATSAPP_BUSINESS_ACCOUNT_ID`
+   - **WhatsApp Business Account ID** → copy this → `Zetta Farm Chatbot`
 
 ### 4c. Generate a Permanent Access Token
 
