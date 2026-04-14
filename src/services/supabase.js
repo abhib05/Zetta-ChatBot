@@ -47,98 +47,18 @@ async function validateFarmCode(farmCode) {
  * @returns {Object} saved dts_submission record
  */
 async function saveDTSSubmission(payload) {
-  const {
-    farmCode,
-    date,
-    filledBy,
-    reasonsForDeviation,
-    nextDayPlans,
-    agronomyReport,
-    machineryUsage = [],
-    harvest = [],
-    whatsappNumber,
-    conversationId,
-  } = payload;
+  // Ensure we assign the date if empty
+  payload.date = payload.date || new Date().toISOString().split('T')[0];
 
-  // ── 1. Insert main DTS record ──────────────────────────────────
-  const { data: dts, error: dtsError } = await supabase
-    .from('dts_submissions')
-    .insert({
-      farm_code: farmCode,
-      submission_date: date || new Date().toISOString().split('T')[0],
-      filled_by: filledBy || null,
-      reasons_for_deviation: reasonsForDeviation || null,
-      next_day_plans: nextDayPlans || null,
-      agronomy_report: agronomyReport || null,
-      whatsapp_number: whatsappNumber,
-      conversation_id: conversationId,
-    })
-    .select()
-    .single();
+  const { data, error } = await supabase.rpc('submit_full_dts', { payload });
 
-  if (dtsError) {
-    console.error('Supabase DTS insert error:', dtsError);
-    throw new Error(`Failed to save DTS: ${dtsError.message}`);
+  if (error) {
+    console.error('Supabase RPC transaction error:', error);
+    throw new Error(`Failed to save DTS transactionally: ${error.message}`);
   }
 
-  const dtsId = dts.id;
-
-  // ── 2. Insert machinery usage records ─────────────────────────
-  if (machineryUsage.length > 0) {
-    const machineryRows = machineryUsage.map((m) => ({
-      dts_submission_id: dtsId,
-      plot: m.plot || null,
-      crop: m.crop || null,
-      acres: m.acres ? parseFloat(m.acres) : null,
-      activity_name: m.activityName || null,
-      machine_type: m.machineType || null,
-      machine_code: m.machineCode || null,
-      time_hours: m.timeHours ? parseInt(m.timeHours) : 0,
-      time_minutes: m.timeMinutes ? parseInt(m.timeMinutes) : 0,
-      fuel_used_litres: m.fuelUsed ? parseFloat(m.fuelUsed) : null,
-    }));
-
-    const { error: machErr } = await supabase
-      .from('machinery_usage')
-      .insert(machineryRows);
-
-    if (machErr) {
-      console.error('Machinery insert error:', machErr);
-      throw new Error(`Failed to save machinery data: ${machErr.message}`);
-    }
-  }
-
-  // ── 3. Insert harvest records ──────────────────────────────────
-  if (harvest.length > 0) {
-    const harvestRows = harvest.map((h) => ({
-      dts_submission_id: dtsId,
-      plot: h.plot || null,
-      crop: h.crop || null,
-      acres: h.acres ? parseFloat(h.acres) : null,
-      harvest_cycle_no: h.harvestCycleNo || null,
-      harvesting_method: h.harvestingMethod || null,
-      quantity: h.quantity ? parseFloat(h.quantity) : null,
-      quantity_unit: h.quantityUnit || 'kg',
-      labour_count: h.labourCount ? parseInt(h.labourCount) : null,
-      machine: h.machine || null,
-      time_hours: h.timeHours ? parseInt(h.timeHours) : 0,
-      time_minutes: h.timeMinutes ? parseInt(h.timeMinutes) : 0,
-      expense_type: h.expenseType || null,
-      expense_amount: h.expenseAmount ? parseFloat(h.expenseAmount) : null,
-    }));
-
-    const { error: harvErr } = await supabase
-      .from('harvest_records')
-      .insert(harvestRows);
-
-    if (harvErr) {
-      console.error('Harvest insert error:', harvErr);
-      throw new Error(`Failed to save harvest data: ${harvErr.message}`);
-    }
-  }
-
-  console.log(`✅ DTS saved: ${dts.id} | Farm: ${farmCode} | Date: ${date}`);
-  return dts;
+  console.log(`✅ DTS saved: ${data.id} | Farm: ${payload.farmCode} | Date: ${payload.date}`);
+  return data;
 }
 
 // ─────────────────────────────────────────────
@@ -154,7 +74,8 @@ async function checkDuplicateSubmission(farmCode, date) {
     .select('id, submitted_at')
     .eq('farm_code', farmCode)
     .eq('submission_date', date)
-    .single();
+    .limit(1)
+    .maybeSingle();
   return data || null;
 }
 

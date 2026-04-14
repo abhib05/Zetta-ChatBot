@@ -16,9 +16,11 @@
 
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const config = require('../config');
 const { handleIncomingMessage } = require('../handlers/conversation');
 const { sendMessage, markAsRead } = require('../services/whatsapp');
+const { markMessageProcessed, acquireLock, releaseLock } = require('../services/session');
 
 // ─────────────────────────────────────────────
 // GET /webhook/whatsapp — Meta verification handshake
@@ -40,9 +42,26 @@ router.get('/whatsapp', (req, res) => {
 // ─────────────────────────────────────────────
 // POST /webhook/whatsapp — Incoming messages from farmers
 // ─────────────────────────────────────────────
-router.post('/whatsapp', (req, res) => {
+router.post('/whatsapp', async (req, res) => {
+  // ── 0. Verify Signature ───────────────────────────────────────
+  const signature = req.headers['x-hub-signature-256'];
+  if (!signature) {
+    console.warn('⚠️ Webhook missing signature');
+    return res.status(401).send('Missing signature');
+  }
+
+  const expectedHash = crypto
+    .createHmac('sha256', config.whatsapp.appSecret)
+    .update(req.rawBody || '')
+    .digest('hex');
+
+  if (`sha256=${expectedHash}` !== signature) {
+    console.warn('⚠️ Webhook signature mismatch');
+    return res.status(403).send('Invalid signature');
+  }
+
   // ── ACK Meta immediately ───────────────────────────────────────
-  // Meta requires HTTP 200 within 20s or it retries (causing duplicate processing).
+  // Meta requires HTTP 200 within 20s or it retries.
   res.status(200).send('EVENT_RECEIVED');
 
   // ── Parse the Meta webhook payload ────────────────────────────
@@ -79,6 +98,13 @@ router.post('/whatsapp', (req, res) => {
 
     if (!from) return;
 
+    // ── Check idempotency ──
+    const isNewMessage = await markMessageProcessed(msgId);
+    if (!isNewMessage) {
+      console.log(`⏭️  Skipping duplicate message: ${msgId}`);
+      return;
+    }
+
     // Mark as read (shows blue ticks to farmer — good UX)
     markAsRead(msgId).catch(() => {});
 
@@ -99,10 +125,21 @@ router.post('/whatsapp', (req, res) => {
 
     console.log(`📱 [IN] ${from}: ${text}`);
 
+    // ── Check lock to prevent race condition ──
+    const locked = await acquireLock(from);
+    if (!locked) {
+      console.log(`🔒 Concurrent message skipped for ${from}: lock active.`);
+      return; // Could push to queue in future, but skip handles rapid-fire spam
+    }
+
     // ── Process the message asynchronously ────────────────────────
-    handleIncomingMessage(from, text).catch((err) => {
+    try {
+      await handleIncomingMessage(from, text);
+    } catch (err) {
       console.error(`Unhandled error processing message from ${from}:`, err);
-    });
+    } finally {
+      await releaseLock(from);
+    }
 
   } catch (err) {
     console.error('Webhook parse error:', err);

@@ -39,9 +39,18 @@ app.use(helmet());
 // Request logging (combined format for production, dev for local)
 app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'));
 
-// Parse Twilio's URL-encoded form data
+// Parse URL-encoded data
 app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+
+// Parse JSON and retain the raw buffer for webhook signature verification
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+
+// Trust reverse proxies (important for Render/Railway/Heroku)
+app.set('trust proxy', 1);
 
 // Rate limiting
 // Twilio sends from a small set of IPs, so we use a generous limit.

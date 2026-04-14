@@ -93,7 +93,8 @@ async function handleFarmCode(from, input, session) {
   }
 
   // Check for duplicate submission today
-  const today = new Date().toISOString().split('T')[0];
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const today = new Date(Date.now() + istOffsetMs).toISOString().split('T')[0];
   const existing = await supabaseService.checkDuplicateSubmission(farmCode, today);
 
   if (existing) {
@@ -135,7 +136,8 @@ async function handleDuplicateConfirm(from, input, session) {
 // ─────────────────────────────────────────────
 
 async function activateFarmSession(from, session, farm) {
-  const today = new Date().toISOString().split('T')[0];
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const today = new Date(Date.now() + istOffsetMs).toISOString().split('T')[0];
   const greeting = getTimeGreeting();
 
   session.state = 'COLLECTING_DATA';
@@ -165,15 +167,9 @@ async function handleDataCollection(from, message, session) {
     // Increment turn counter
     session.turnCount = (session.turnCount || 0) + 1;
 
-    // Safety valve — auto-save if conversation goes too long
-    if (session.turnCount > config.conversation.maxTurns) {
-      console.warn(`⚠️  Max turns reached for ${from}. Auto-saving.`);
-      await handleSubmission(from, session, null);
-      return;
-    }
-
-    // Add farmer's message to history
-    session.conversationHistory.push({ role: 'user', content: message });
+    // Detect manual exit phrases OR max turns
+    const isExit = openaiService.isExitPhrase(message);
+    const hitMaxTurns = session.turnCount > config.conversation.maxTurns;
 
     // Build farm context for AI
     const farmCtx = {
@@ -182,8 +178,25 @@ async function handleDataCollection(from, message, session) {
       date: session.date,
     };
 
+    if (isExit || hitMaxTurns) {
+      if (hitMaxTurns) console.warn(`⚠️  Max turns reached for ${from}. Auto-saving.`);
+      await whatsappService.sendMessage(from, `Saving your report now, please wait...`);
+      
+      const finalPrompt = "The user has completed the report. Please output the final <SAVE_DATA> block now with all observed details.";
+      const historyWindow = session.conversationHistory.slice(-20);
+      
+      const aiRaw = await openaiService.processMessage(historyWindow, finalPrompt, farmCtx);
+      const saveData = openaiService.extractSaveData(aiRaw);
+      
+      await sessionService.setSession(from, session);
+      await handleSubmission(from, session, saveData || session.collectedData);
+      return;
+    }
+
+    // Add farmer's message to history
+    session.conversationHistory.push({ role: 'user', content: message });
+
     // Keep only the last 20 turns in history to control token usage
-    // (older context is less relevant at scale)
     const historyWindow = session.conversationHistory.slice(-20);
 
     // Get AI response
@@ -200,15 +213,6 @@ async function handleDataCollection(from, message, session) {
       // AI has collected enough and wants to save
       await sessionService.setSession(from, session);
       await handleSubmission(from, session, saveData);
-      return;
-    }
-
-    // Detect manual exit phrases
-    if (openaiService.isExitPhrase(message)) {
-      // Farmer wants to wrap up — trigger save with what we have
-      await whatsappService.sendMessage(from, `Saving your report now, please wait...`);
-      await sessionService.setSession(from, session);
-      await handleSubmission(from, session, null);
       return;
     }
 

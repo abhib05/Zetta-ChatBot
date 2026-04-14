@@ -10,6 +10,7 @@ const config = {
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID, // Phone Number ID from Meta app
     businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID, // WABA ID (for reference)
     verifyToken:   process.env.WHATSAPP_VERIFY_TOKEN,   // Your custom webhook verify string
+    appSecret:     process.env.META_APP_SECRET,         // Meta App Secret for signature
   },
 
   openai: {
@@ -38,6 +39,7 @@ function validate() {
     ['WHATSAPP_ACCESS_TOKEN',    config.whatsapp.accessToken],
     ['WHATSAPP_PHONE_NUMBER_ID', config.whatsapp.phoneNumberId],
     ['WHATSAPP_VERIFY_TOKEN',    config.whatsapp.verifyToken],
+    ['META_APP_SECRET',          config.whatsapp.appSecret],
     ['OPENAI_API_KEY',           config.openai.apiKey],
     ['SUPABASE_URL',             config.supabase.url],
     ['SUPABASE_SERVICE_KEY',     config.supabase.serviceKey],
