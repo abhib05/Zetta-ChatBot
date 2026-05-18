@@ -222,3 +222,84 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_farms_updated_at
   BEFORE UPDATE ON farms
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================
+-- RPC FUNCTION — transactions
+-- ============================================================
+CREATE OR REPLACE FUNCTION submit_full_dts(payload jsonb) RETURNS json AS $$
+DECLARE
+  v_dts_id UUID;
+  item jsonb;
+BEGIN
+  -- 1. Insert main DTS record
+  INSERT INTO dts_submissions (
+    farm_code, submission_date, filled_by, 
+    reasons_for_deviation, next_day_plans, agronomy_report, 
+    whatsapp_number, conversation_id
+  )
+  VALUES (
+    payload->>'farmCode', 
+    (payload->>'date')::date, 
+    payload->>'filledBy',
+    payload->>'reasonsForDeviation', 
+    payload->>'nextDayPlans', 
+    payload->>'agronomyReport',
+    payload->>'whatsappNumber', 
+    payload->>'conversationId'
+  )
+  RETURNING id INTO v_dts_id;
+
+  -- 2. Insert machinery_usage
+  IF jsonb_typeof(payload->'machineryUsage') = 'array' THEN
+    FOR item IN SELECT * FROM jsonb_array_elements(payload->'machineryUsage')
+    LOOP
+      INSERT INTO machinery_usage (
+        dts_submission_id, plot, crop, acres, activity_name, 
+        machine_type, machine_code, time_hours, time_minutes, fuel_used_litres
+      )
+      VALUES (
+        v_dts_id, 
+        item->>'plot', 
+        item->>'crop', 
+        NULLIF((item->>'acres'), '')::numeric, 
+        item->>'activityName', 
+        item->>'machineType', 
+        item->>'machineCode', 
+        COALESCE(NULLIF((item->>'timeHours'), '')::int, 0), 
+        COALESCE(NULLIF((item->>'timeMinutes'), '')::int, 0), 
+        NULLIF((item->>'fuelUsed'), '')::numeric
+      );
+    END LOOP;
+  END IF;
+
+  -- 3. Insert harvest_records
+  IF jsonb_typeof(payload->'harvest') = 'array' THEN
+    FOR item IN SELECT * FROM jsonb_array_elements(payload->'harvest')
+    LOOP
+      INSERT INTO harvest_records (
+        dts_submission_id, plot, crop, acres, harvest_cycle_no, harvesting_method, 
+        quantity, quantity_unit, labour_count, machine, time_hours, time_minutes, 
+        expense_type, expense_amount
+      )
+      VALUES (
+        v_dts_id, 
+        item->>'plot', 
+        item->>'crop', 
+        NULLIF((item->>'acres'), '')::numeric, 
+        item->>'harvestCycleNo', 
+        item->>'harvestingMethod', 
+        NULLIF((item->>'quantity'), '')::numeric, 
+        COALESCE(item->>'quantityUnit', 'kg'), 
+        NULLIF((item->>'labourCount'), '')::int, 
+        item->>'machine', 
+        COALESCE(NULLIF((item->>'timeHours'), '')::int, 0), 
+        COALESCE(NULLIF((item->>'timeMinutes'), '')::int, 0), 
+        item->>'expenseType', 
+        NULLIF((item->>'expenseAmount'), '')::numeric
+      );
+    END LOOP;
+  END IF;
+
+  RETURN json_build_object('id', v_dts_id);
+END;
+$$ LANGUAGE plpgsql;

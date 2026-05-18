@@ -7,12 +7,13 @@
 
 const Redis = require('ioredis');
 const config = require('../config');
+const { LRUCache } = require('lru-cache');
 
 const SESSION_PREFIX = 'zetta:session:';
 let redisClient = null;
 
-// In-memory fallback for development without Redis
-const memStore = new Map();
+// In-memory fallback for development without Redis (with TTL/Max bounds)
+const memStore = new LRUCache({ max: 1000, ttl: 1000 * 60 * 60 * 24 });
 
 function getClient() {
   if (redisClient) return redisClient;
@@ -28,7 +29,7 @@ function getClient() {
   redisClient.on('connect', () => console.log('✅ Redis connected'));
   redisClient.on('error', (err) => {
     console.warn('⚠️  Redis error (falling back to memory):', err.message);
-    redisClient = null; // Reset so next call retries
+    // Keep ioredis instance so it tries reconnecting instead of spamming new maps/clients
   });
 
   return redisClient;
@@ -95,4 +96,47 @@ async function createSession(phoneNumber) {
   return session;
 }
 
-module.exports = { getSession, setSession, deleteSession, createSession };
+/**
+ * Marks a message as processed. Returns true if unique, false if duplicate.
+ */
+async function markMessageProcessed(msgId) {
+  const key = `msg_seen:${msgId}`;
+  try {
+    const client = getClient();
+    const isNew = await client.set(key, '1', 'NX', 'EX', 3600);
+    return !!isNew;
+  } catch {
+    // Memory fallback
+    if (memStore.has(key)) return false;
+    memStore.set(key, '1', { ttl: 1000 * 60 * 60 });
+    return true;
+  }
+}
+
+/**
+ * Acquire a lock for a phone number to prevent race conditions.
+ */
+async function acquireLock(phoneNumber) {
+  const key = `lock:${phoneNumber}`;
+  try {
+    const client = getClient();
+    const isNew = await client.set(key, '1', 'NX', 'EX', 15);
+    return !!isNew;
+  } catch {
+    if (memStore.has(key)) return false;
+    memStore.set(key, '1', { ttl: 15 * 1000 });
+    return true;
+  }
+}
+
+async function releaseLock(phoneNumber) {
+  const key = `lock:${phoneNumber}`;
+  try {
+    const client = getClient();
+    await client.del(key);
+  } catch {
+    memStore.delete(key);
+  }
+}
+
+module.exports = { getSession, setSession, deleteSession, createSession, markMessageProcessed, acquireLock, releaseLock };

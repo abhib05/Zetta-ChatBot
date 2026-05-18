@@ -164,7 +164,9 @@ function extractSaveData(aiResponse) {
   const match = aiResponse.match(/<SAVE_DATA>([\s\S]*?)<\/SAVE_DATA>/);
   if (!match) return null;
   try {
-    return JSON.parse(match[1].trim());
+    let cleanStr = match[1].trim();
+    cleanStr = cleanStr.replace(/^```(json)?|```$/gm, '').trim();
+    return JSON.parse(cleanStr);
   } catch (e) {
     console.error('⚠️  Failed to parse SAVE_DATA JSON:', e.message);
     console.error('Raw block:', match[1]);
