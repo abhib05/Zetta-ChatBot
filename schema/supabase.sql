@@ -12,9 +12,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Master list of farms and their codes.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS farms (
-  id           UUID         DEFAULT uuid_generate_v4() PRIMARY KEY,
-  farm_code    VARCHAR(20)  UNIQUE NOT NULL,
-  farm_name    VARCHAR(255) NOT NULL,
+  farm_code    VARCHAR(20)  PRIMARY KEY,
   location     VARCHAR(255),
   owner_name   VARCHAR(255),
   total_acres  DECIMAL(10,2),
@@ -61,8 +59,6 @@ CREATE TABLE IF NOT EXISTS machinery_usage (
   acres               DECIMAL(10,2),
   activity_name       VARCHAR(255),
   machine_type        VARCHAR(100),
-  machine_code        VARCHAR(50),
-  time_hours          INTEGER      DEFAULT 0 CHECK (time_hours >= 0),
   time_minutes        INTEGER      DEFAULT 0 CHECK (time_minutes >= 0 AND time_minutes < 60),
   fuel_used_litres    DECIMAL(10,2),
   created_at          TIMESTAMPTZ  DEFAULT NOW()
@@ -87,15 +83,12 @@ CREATE TABLE IF NOT EXISTS harvest_records (
   quantity_unit       VARCHAR(50)  DEFAULT 'kg',
   labour_count        INTEGER,
   machine             VARCHAR(150),
-  time_hours          INTEGER      DEFAULT 0 CHECK (time_hours >= 0),
   time_minutes        INTEGER      DEFAULT 0 CHECK (time_minutes >= 0 AND time_minutes < 60),
-  expense_type        VARCHAR(10)  CHECK (expense_type IN ('Lab', 'Mach', 'Both') OR expense_type IS NULL),
   expense_amount      DECIMAL(12,2),
   created_at          TIMESTAMPTZ  DEFAULT NOW()
 );
 
 COMMENT ON TABLE harvest_records IS 'Individual harvest activity rows from the DTS Harvest section';
-COMMENT ON COLUMN harvest_records.expense_type IS 'Lab = Labour expense, Mach = Machine expense, Both = Both types';
 
 
 -- ============================================================
@@ -164,7 +157,6 @@ CREATE OR REPLACE VIEW v_daily_summary AS
 SELECT
   d.id                                        AS submission_id,
   d.farm_code,
-  f.farm_name,
   f.owner_name,
   f.location,
   d.submission_date,
@@ -183,7 +175,7 @@ JOIN farms f ON f.farm_code = d.farm_code
 LEFT JOIN machinery_usage m ON m.dts_submission_id = d.id
 LEFT JOIN harvest_records h ON h.dts_submission_id = d.id
 GROUP BY
-  d.id, d.farm_code, f.farm_name, f.owner_name, f.location,
+  d.id, d.farm_code, f.owner_name, f.location,
   d.submission_date, d.filled_by, d.submitted_at,
   d.reasons_for_deviation, d.next_day_plans, d.agronomy_report;
 
@@ -194,7 +186,6 @@ COMMENT ON VIEW v_daily_summary IS 'Aggregated daily view — use for dashboard 
 CREATE OR REPLACE VIEW v_missing_submissions_today AS
 SELECT
   f.farm_code,
-  f.farm_name,
   f.owner_name,
   f.location
 FROM farms f
