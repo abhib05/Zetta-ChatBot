@@ -1,13 +1,24 @@
 /**
- * OpenAI Service
+ * OpenRouter Service (OpenAI-compatible)
  * Powers the natural-language DTS data collection conversation.
+ * Uses OpenRouter's free-tier models via the OpenAI SDK (drop-in compatible).
  * Uses structured extraction via <SAVE_DATA> tags to convert chat → DB records.
+ *
+ * OpenRouter docs: https://openrouter.ai/docs
  */
 
 const OpenAI = require('openai');
 const config = require('../config');
 
-const openai = new OpenAI({ apiKey: config.openai.apiKey });
+// OpenRouter is fully OpenAI SDK compatible — just swap the baseURL
+const openai = new OpenAI({
+  apiKey: config.openai.apiKey,
+  baseURL: 'https://openrouter.ai/api/v1',
+  defaultHeaders: {
+    'HTTP-Referer': 'https://zettafarms.com',
+    'X-Title': 'Zetta Farm Chatbot',
+  },
+});
 
 // ─────────────────────────────────────────────
 // SYSTEM PROMPT
