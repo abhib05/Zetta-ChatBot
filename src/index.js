@@ -128,4 +128,10 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
+// Catch unhandled promise rejections — prevents silent crashes
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection:', reason);
+  // Do NOT exit — log and continue, the per-request try/catch handles user-facing errors
+});
+
 module.exports = app; // for testing

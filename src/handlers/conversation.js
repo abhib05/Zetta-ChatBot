@@ -509,7 +509,7 @@ async function submitToDB(from, session) {
       const c = session.dbCache.allCrops.find(x => x.crop_name.toLowerCase() === act.crop_name.toLowerCase());
       if (c) act.crop_id = c.crop_id;
     }
-    // 3. Map Machine
+    // 3. Map Machine — guard `act.details` existence to prevent TypeError when LLM omits the details object
     if (act.details && act.details.machine_name) {
       const m = session.dbCache.machines.find(x => x.machine_name.toLowerCase() === act.details.machine_name.toLowerCase());
       if (m) act.details.machine_id = m.machine_id;
@@ -557,6 +557,15 @@ async function submitToDB(from, session) {
   };
 
   try {
+    // Guard: prevent duplicate DTS submissions for the same farm+day
+    const today = new Date().toISOString().split('T')[0];
+    const existing = await supabaseService.checkDuplicateSubmission(session.farmId, today);
+    if (existing) {
+      await whatsappService.sendMessage(from, `⚠️ A DTS for *${session.farmCode}* on *${today}* was already submitted (Ref: ${existing.submission_id}). Resetting session.`);
+      await sessionService.deleteSession(from);
+      return;
+    }
+
     const saved = await supabaseService.saveDTSSubmission(payload);
     await whatsappService.sendMessage(from, `✅ Daily Task Sheet Submitted successfully!\nReference ID: ${saved.submission_id}\n\nHave a good evening!`);
     await sessionService.deleteSession(from);

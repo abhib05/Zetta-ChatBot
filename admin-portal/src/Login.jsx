@@ -14,11 +14,15 @@ export default function Login() {
     setError('');
     setLoading(true);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
     try {
       const response = await fetch('http://localhost:3000/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password }),
+        signal: controller.signal
       });
 
       const data = await response.json();
@@ -30,10 +34,16 @@ export default function Login() {
         setError(data.error || 'Login failed');
       }
     } catch (err) {
-      setError('Network error. Is the backend running?');
+      if (err.name === 'AbortError') {
+        setError('Request timed out. Is the backend running?');
+      } else {
+        setError('Network error. Is the backend running?');
+      }
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
+
   };
 
   return (
