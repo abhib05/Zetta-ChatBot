@@ -244,13 +244,68 @@ async function askNextMissingField(from, session) {
 
 async function handleMissingFields(from, msg, session) {
   const missing = session.missingFieldsQueue.shift();
-  
-  // Inject raw string into JSON (NO LLM CALL YET)
   const act = session.parsedJSON.activities[missing.activityIndex];
+
+  let mainVal = msg;
+  let extractedUnit = null;
+
+  // If the user was asked for quantity or similar, and provides "10 kgs", split it
+  if (['quantity', 'input_qty'].includes(missing.field)) {
+    const match = msg.trim().match(/^([\d.]+)\s+([a-zA-Z].*)$/);
+    if (match) {
+      let val = parseFloat(match[1]);
+      let rawUnit = match[2].toLowerCase().trim();
+      
+      if (rawUnit === 'kgs' || rawUnit === 'kg') {
+        mainVal = val / 1000;
+        extractedUnit = 'tons';
+      } else if (rawUnit === 'tons' || rawUnit === 'ton') {
+        mainVal = val;
+        extractedUnit = 'tons';
+      } else {
+        mainVal = match[1];
+        extractedUnit = match[2];
+      }
+    }
+  }
+
+  // If they were asked explicitly for 'unit' (because they only gave a number earlier)
+  if (missing.field === 'unit') {
+    let rawUnit = msg.trim().toLowerCase();
+    if (rawUnit === 'kgs' || rawUnit === 'kg') {
+      mainVal = 'tons';
+      // Find the previously saved quantity and convert it
+      if (act.details && act.details.quantity) {
+        act.details.quantity = parseFloat(act.details.quantity) / 1000;
+      } else if (act.quantity) {
+        act.quantity = parseFloat(act.quantity) / 1000;
+      }
+    } else if (rawUnit === 'tons' || rawUnit === 'ton') {
+      mainVal = 'tons';
+    }
+  }
+
+  // Inject raw string into JSON
   if (missing.isDetail) {
-    act.details[missing.field] = msg;
+    act.details[missing.field] = mainVal;
   } else {
-    act[missing.field] = msg;
+    act[missing.field] = mainVal;
+  }
+
+  // If we extracted a unit from the quantity answer, fill it and remove from queue
+  if (extractedUnit) {
+    const unitIndex = session.missingFieldsQueue.findIndex(
+      q => q.activityIndex === missing.activityIndex && q.field === 'unit'
+    );
+    if (unitIndex !== -1) {
+      const unitQ = session.missingFieldsQueue[unitIndex];
+      if (unitQ.isDetail) {
+        act.details[unitQ.field] = extractedUnit;
+      } else {
+        act[unitQ.field] = extractedUnit;
+      }
+      session.missingFieldsQueue.splice(unitIndex, 1);
+    }
   }
 
   if (session.missingFieldsQueue.length > 0) {

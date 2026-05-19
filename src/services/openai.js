@@ -131,10 +131,4 @@ function extractSaveData(aiResponse) {
     let cleanStr = match[1].trim();
     cleanStr = cleanStr.replace(/^```(json)?|```$/gm, '').trim();
     return JSON.parse(cleanStr);
-  } catch (e) {
-    console.error('⚠️  Failed to parse SAVE_DATA JSON:', e.message);
-    return null;
-  }
-}
-
 module.exports = { parseActivities, normalizeAndValidate, extractSaveData };
