@@ -20,7 +20,50 @@ const supabase = createClient(config.supabase.url, config.supabase.serviceKey, {
 // ─────────────────────────────────────────────
 
 /**
- * Check if a farm code exists and is active.
+ * Check if an employee code exists and is active.
+ * Returns employee info (including UUID) or null.
+ */
+async function validateEmployeeCode(employeeCode) {
+  const { data, error } = await supabase
+    .from('employees')
+    .select('employee_id, employee_code, employee_name')
+    .eq('employee_code', employeeCode.trim().toLowerCase())
+    .eq('active', true)
+    .single();
+
+  if (error || !data) return null;
+  return data;
+}
+
+/**
+ * Check if a farm code exists, is active, and the employee is assigned to it.
+ * Returns farm info (including UUID) or null.
+ */
+async function validateEmployeeFarmAccess(employeeId, farmCode) {
+  const { data: farm, error: farmError } = await supabase
+    .from('farms')
+    .select('farm_id, farm_code, farm_name, total_acres')
+    .eq('farm_code', farmCode.trim().toUpperCase())
+    .eq('active', true)
+    .single();
+
+  if (farmError || !farm) return null;
+
+  // Check if membership exists
+  const { data: membership, error: memberError } = await supabase
+    .from('farm_memberships')
+    .select('id')
+    .eq('employee_id', employeeId)
+    .eq('farm_id', farm.farm_id)
+    .single();
+
+  if (memberError || !membership) return null;
+
+  return farm;
+}
+
+/**
+ * Check if a farm code exists and is active (legacy fallback if needed).
  * Returns farm info (including UUID) or null.
  */
 async function validateFarmCode(farmCode) {
@@ -152,6 +195,8 @@ async function checkDuplicateSubmission(farmId, date) {
 }
 
 module.exports = { 
+  validateEmployeeCode,
+  validateEmployeeFarmAccess,
   validateFarmCode, 
   getFarmDetails, 
   saveFarmOnboarding, 

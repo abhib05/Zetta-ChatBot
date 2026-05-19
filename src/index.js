@@ -15,6 +15,7 @@ const express = require('express');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const cors = require('cors');
 
 // Validate config before starting
 const config = require('./config');
@@ -26,6 +27,7 @@ try {
 }
 
 const webhookRouter = require('./routes/webhook');
+const adminRouter = require('./routes/admin');
 
 const app = express();
 
@@ -38,6 +40,9 @@ app.use(helmet());
 
 // Request logging (combined format for production, dev for local)
 app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'));
+
+// CORS for the admin portal
+app.use(cors());
 
 // Parse URL-encoded data
 app.use(express.urlencoded({ extended: false }));
@@ -74,6 +79,7 @@ app.use('/webhook', webhookLimiter);
 // ─────────────────────────────────────────────
 
 app.use('/webhook', webhookRouter);
+app.use('/admin', adminRouter);
 
 // Health check — used by Railway/Render for uptime monitoring
 app.get('/health', (req, res) => {
@@ -120,6 +126,12 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
   console.log('SIGINT received — shutting down gracefully');
   process.exit(0);
+});
+
+// Catch unhandled promise rejections — prevents silent crashes
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection:', reason);
+  // Do NOT exit — log and continue, the per-request try/catch handles user-facing errors
 });
 
 module.exports = app; // for testing
