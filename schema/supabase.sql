@@ -12,6 +12,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS employees (
   employee_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_code TEXT UNIQUE NOT NULL,
   employee_name TEXT NOT NULL,
   active BOOLEAN NOT NULL DEFAULT TRUE
 );
@@ -60,6 +61,15 @@ CREATE TABLE IF NOT EXISTS farm_memberships (
   farm_id UUID NOT NULL REFERENCES farms(farm_id) ON DELETE CASCADE,
   role TEXT NOT NULL,
   UNIQUE (employee_id, farm_id)
+);
+
+CREATE TABLE IF NOT EXISTS harvest_requests (
+  request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  submission_id UUID NOT NULL REFERENCES dts_submissions(submission_id) ON DELETE CASCADE,
+  plot_id UUID NOT NULL REFERENCES farm_plots(plot_id) ON DELETE CASCADE,
+  crop_id UUID NOT NULL REFERENCES crops(crop_id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ============================================================
@@ -339,9 +349,10 @@ BEGIN
         VALUES (v_entry_id, NULLIF((item->'details'->>'machine_id'), '')::UUID, item->'details'->>'machine_code_snapshot', NULLIF((item->'details'->>'time_minutes'), '')::int, NULLIF((item->'details'->>'fuel_used_litres'), '')::numeric);
 
       ELSIF item->>'activity_type_name' = 'harvest' THEN
-        -- Clear current crop in farm_plots upon harvest
-        IF item->>'plot_id' IS NOT NULL THEN
-          UPDATE farm_plots SET current_crop_id = NULL WHERE plot_id = (item->>'plot_id')::UUID;
+        -- Instead of clearing crop immediately, we insert a harvest request
+        IF item->>'plot_id' IS NOT NULL AND item->>'crop_id' IS NOT NULL THEN
+          INSERT INTO harvest_requests (submission_id, plot_id, crop_id)
+          VALUES (v_submission_id, (item->>'plot_id')::UUID, (item->>'crop_id')::UUID);
         END IF;
 
         INSERT INTO dts_harvest_details (entry_id, harvest_cycle_no, harvesting_method, quantity, unit, labour_count, machine_time_minutes, expense_amount)

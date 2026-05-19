@@ -4,10 +4,10 @@
 -- ============================================================
 
 -- 1. Create Employees
-INSERT INTO employees (employee_id, employee_name, active) VALUES
-  ('e1a4d6ab-743f-4e0c-a968-3c35b8fc6e23', 'Rajesh Patil', TRUE),
-  ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'Suresh Kumar', TRUE),
-  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'Priya Desai', TRUE)
+INSERT INTO employees (employee_id, employee_code, employee_name, active) VALUES
+  ('e1a4d6ab-743f-4e0c-a968-3c35b8fc6e23', 'emp 001', 'Rajesh Patil', TRUE),
+  ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'emp 002', 'Suresh Kumar', TRUE),
+  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'emp 003', 'Priya Desai', TRUE)
 ON CONFLICT DO NOTHING;
 
 -- 2. Create Crops

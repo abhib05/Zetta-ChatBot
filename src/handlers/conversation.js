@@ -26,12 +26,17 @@ async function handleIncomingMessage(from, body) {
 
   if (!session) {
     session = await sessionService.createSession(from);
-    await whatsappService.sendMessage(from, `Welcome to Zetta Farms Daily Reporting!\n\nPlease send your Farm Code to begin (e.g. ZF-001).`);
+    session.state = 'AWAITING_EMPLOYEE_CODE';
+    await sessionService.setSession(from, session);
+    await whatsappService.sendMessage(from, `Welcome to Zetta Farms Daily Reporting!\n\nPlease send your Employee Code to begin (e.g. emp 001).`);
     return;
   }
 
   try {
     switch (session.state) {
+      case 'AWAITING_EMPLOYEE_CODE':
+        await handleEmployeeCode(from, msg, session);
+        break;
       case 'AWAITING_FARM_CODE':
         await handleFarmCode(from, msg, session);
         break;
@@ -61,7 +66,7 @@ async function handleIncomingMessage(from, body) {
         break;
       default:
         await sessionService.deleteSession(from);
-        await whatsappService.sendMessage(from, "Session reset. Please send your Farm Code.");
+        await whatsappService.sendMessage(from, "Session reset. Please send your Employee Code.");
     }
   } catch (err) {
     console.error('Conversation Error:', err);
@@ -70,15 +75,32 @@ async function handleIncomingMessage(from, body) {
 }
 
 // ─────────────────────────────────────────────
-// STEP 1: FARM VERIFICATION
+// STEP 1 & 2: EMPLOYEE & FARM VERIFICATION
 // ─────────────────────────────────────────────
+
+async function handleEmployeeCode(from, msg, session) {
+  const code = msg.trim();
+  const employee = await supabaseService.validateEmployeeCode(code);
+
+  if (!employee) {
+    return whatsappService.sendMessage(from, `Employee code not found or inactive. Try again:`);
+  }
+
+  session.employeeId = employee.employee_id;
+  session.employeeName = employee.employee_name;
+  session.employeeCode = employee.employee_code;
+  session.state = 'AWAITING_FARM_CODE';
+  await sessionService.setSession(from, session);
+
+  await whatsappService.sendMessage(from, `Welcome ${employee.employee_name}!\n\nPlease send the Farm Code you are reporting for (e.g. ZF-001).`);
+}
 
 async function handleFarmCode(from, msg, session) {
   const code = msg.toUpperCase();
-  const farm = await supabaseService.validateFarmCode(code);
+  const farm = await supabaseService.validateEmployeeFarmAccess(session.employeeId, code);
 
   if (!farm) {
-    return whatsappService.sendMessage(from, `Farm code not found. Try again:`);
+    return whatsappService.sendMessage(from, `Farm code not found or you are not authorized for this farm. Try again:`);
   }
 
   session.farmId = farm.farm_id;
@@ -504,6 +526,7 @@ async function submitToDB(from, session) {
     farm_code_snapshot: session.farmCode,
     farm_name_snapshot: session.farmName,
     report_date: new Date().toISOString().split('T')[0],
+    filled_by_employee_id: session.employeeId,
     deviation_notes: session.parsedJSON.deviation_notes,
     next_day_plans: session.parsedJSON.next_day_plans,
     agronomy_report: session.parsedJSON.agronomy_report,
