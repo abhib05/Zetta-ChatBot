@@ -53,6 +53,9 @@ async function handleIncomingMessage(from, body) {
       case 'ASK_MORE_ACTIVITIES':
         await handleMoreActivities(from, msg, session);
         break;
+      case 'ASK_NO_ACTIVITY_REASON':
+        await handleNoActivityReason(from, msg, session);
+        break;
       case 'CONFIRM_DELETE':
         await handleConfirmDelete(from, msg, session);
         break;
@@ -136,6 +139,8 @@ async function promptActivities(from, session) {
 
   let text = `Which activities were done today? Reply with numbers (e.g., "3, 4"):\n`;
   ACTIVITY_TYPES.forEach(a => text += `\n${a.id}. ${a.label}`);
+  text += `\n8. Nothing more to add`;
+  text += `\n9. No activities done today`;
   await whatsappService.sendMessage(from, text);
 }
 
@@ -143,10 +148,20 @@ async function handleSelectActivities(from, msg, session) {
   const nums = msg.match(/\d+/g);
   if (!nums) return whatsappService.sendMessage(from, `Please send numbers matching the menu.`);
 
-  const selected = nums.map(n => parseInt(n)).filter(n => n >= 1 && n <= 7);
+  const selected = nums.map(n => parseInt(n)).filter(n => n >= 1 && n <= 9);
   if (selected.length === 0) return whatsappService.sendMessage(from, `Invalid selection.`);
 
-  const newActivities = selected.map(n => ACTIVITY_TYPES.find(a => a.id === n).name);
+  if (selected.includes(9)) {
+    session.state = 'ASK_NO_ACTIVITY_REASON';
+    await sessionService.setSession(from, session);
+    return whatsappService.sendMessage(from, `Please provide the reason for not doing any activities today.`);
+  }
+
+  if (selected.includes(8)) {
+    return whatsappService.sendMessage(from, `You haven't selected any activities yet. Do you want to add new data (choose 1-7) or proceed with 9 (No activities done today)?`);
+  }
+
+  const newActivities = selected.filter(n => n >= 1 && n <= 7).map(n => ACTIVITY_TYPES.find(a => a.id === n).name);
   
   // Initialize queues
   session.selectedActivities = newActivities;
@@ -353,16 +368,39 @@ async function handleFinalReview(from, msg, session) {
     await sessionService.setSession(from, session);
     let text = `Which OTHER activities were done today? Reply with numbers (e.g., "3, 4"):\n`;
     ACTIVITY_TYPES.forEach(a => text += `\n${a.id}. ${a.label}`);
+    text += `\n8. Nothing more to add`;
+    text += `\n9. No activities done today`;
     await whatsappService.sendMessage(from, text);
   }
 }
 
 async function handleMoreActivities(from, msg, session) {
-  const nums = msg.match(/\d+/g);
-  if (!nums) return;
+  const lower = msg.toLowerCase();
+  
+  // If they change their mind and type "Done" or "No more"
+  if (lower.includes('done') || lower.includes('no') || lower.includes('none') || lower.includes('cancel')) {
+    return submitToDB(from, session);
+  }
 
-  const selected = nums.map(n => parseInt(n)).filter(n => n >= 1 && n <= 7);
-  const newActivities = selected.map(n => ACTIVITY_TYPES.find(a => a.id === n).name);
+  const nums = msg.match(/\d+/g);
+  if (!nums) {
+    return whatsappService.sendMessage(from, `Please reply with numbers (e.g., "3, 4") or type "Done" to submit your report.`);
+  }
+
+  const selected = nums.map(n => parseInt(n)).filter(n => n >= 1 && n <= 9);
+  if (selected.length === 0) {
+    return whatsappService.sendMessage(from, `Invalid selection. Please reply with numbers between 1 and 9.`);
+  }
+
+  if (selected.includes(8)) {
+    return submitToDB(from, session);
+  }
+
+  if (selected.includes(9)) {
+    return whatsappService.sendMessage(from, `You've already reported activities today. If you are done, reply with 8.`);
+  }
+
+  const newActivities = selected.filter(n => n >= 1 && n <= 7).map(n => ACTIVITY_TYPES.find(a => a.id === n).name);
 
   // Check conflicts
   const conflict = newActivities.find(act => session.selectedActivities.includes(act));
@@ -407,11 +445,60 @@ async function handleConfirmDelete(from, msg, session) {
   }
 }
 
+async function handleNoActivityReason(from, msg, session) {
+  session.parsedJSON = {
+    activities: [],
+    deviation_notes: `No activities today. Reason: ${msg}`,
+    next_day_plans: null,
+    agronomy_report: null
+  };
+  await submitToDB(from, session);
+}
+
 // ─────────────────────────────────────────────
 // DB SUBMISSION
 // ─────────────────────────────────────────────
 
 async function submitToDB(from, session) {
+  // Defensive: Ensure activities array exists
+  if (!session.parsedJSON.activities) {
+    session.parsedJSON.activities = [];
+  }
+
+  // Map Names to UUIDs and enforce numeric types before DB insertion
+  const cleanActivities = session.parsedJSON.activities.map(act => {
+    // 1. Map Plot
+    if (act.plot_name) {
+      const p = session.dbCache.plots.find(x => x.plot_code.toLowerCase() === act.plot_name.toLowerCase());
+      if (p) act.plot_id = p.plot_id;
+    }
+    // 2. Map Crop
+    if (act.crop_name) {
+      const c = session.dbCache.allCrops.find(x => x.crop_name.toLowerCase() === act.crop_name.toLowerCase());
+      if (c) act.crop_id = c.crop_id;
+    }
+    // 3. Map Machine
+    if (act.details && act.details.machine_name) {
+      const m = session.dbCache.machines.find(x => x.machine_name.toLowerCase() === act.details.machine_name.toLowerCase());
+      if (m) act.details.machine_id = m.machine_id;
+    }
+
+    // 4. Defensively enforce numeric fields (LLM sometimes fails to nullify text in integers)
+    const intFields = ['labour_count', 'duration_minutes', 'harvest_cycle_no', 'plants_sown', 'time_minutes', 'machine_time_minutes'];
+    const numFields = ['acres', 'expense_amount', 'quantity', 'fuel_used_litres', 'input_qty', 'seed_rate_per_acre'];
+
+    intFields.forEach(f => {
+      if (act[f] !== undefined) act[f] = parseInt(act[f]) || null;
+      if (act.details && act.details[f] !== undefined) act.details[f] = parseInt(act.details[f]) || null;
+    });
+    numFields.forEach(f => {
+      if (act[f] !== undefined) act[f] = parseFloat(act[f]) || null;
+      if (act.details && act.details[f] !== undefined) act.details[f] = parseFloat(act.details[f]) || null;
+    });
+
+    return act;
+  });
+
   const payload = {
     farm_id: session.farmId,
     farm_code_snapshot: session.farmCode,
@@ -420,7 +507,7 @@ async function submitToDB(from, session) {
     deviation_notes: session.parsedJSON.deviation_notes,
     next_day_plans: session.parsedJSON.next_day_plans,
     agronomy_report: session.parsedJSON.agronomy_report,
-    activities: session.parsedJSON.activities
+    activities: cleanActivities
   };
 
   try {
