@@ -1,296 +1,355 @@
 -- ============================================================
--- ZETTA FARMS — SUPABASE DATABASE SCHEMA
--- Run this entire script in Supabase SQL Editor (one shot)
+-- DTS / Farm Management Schema
+-- PostgreSQL
 -- ============================================================
 
--- Enable UUID generation
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
+-- Required for gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ============================================================
--- TABLE 1: farms
--- Master list of farms and their codes.
+-- MASTER TABLES
 -- ============================================================
+
+CREATE TABLE IF NOT EXISTS employees (
+  employee_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_name TEXT NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
 CREATE TABLE IF NOT EXISTS farms (
-  farm_code    VARCHAR(20)  PRIMARY KEY,
-  location     VARCHAR(255),
-  owner_name   VARCHAR(255),
-  total_acres  DECIMAL(10,2),
-  active       BOOLEAN      DEFAULT TRUE,
-  created_at   TIMESTAMPTZ  DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ  DEFAULT NOW()
+  farm_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farm_code TEXT UNIQUE NOT NULL,
+  farm_name TEXT,
+  total_acres NUMERIC CHECK (total_acres >= 0),
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-COMMENT ON TABLE farms IS 'Master registry of all Zetta farm properties and their unique codes';
-COMMENT ON COLUMN farms.farm_code IS 'Unique alphanumeric code used by farmers to identify their farm (e.g. ZF-001)';
-COMMENT ON COLUMN farms.active    IS 'Set to false to deactivate a farm without deleting records';
+CREATE TABLE IF NOT EXISTS crops (
+  crop_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  crop_name TEXT UNIQUE NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE
+);
 
+CREATE TABLE IF NOT EXISTS farm_plots (
+  plot_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farm_id UUID NOT NULL REFERENCES farms(farm_id) ON DELETE CASCADE,
+  plot_code TEXT NOT NULL,
+  acres NUMERIC CHECK (acres > 0),
+  current_crop_id UUID REFERENCES crops(crop_id) ON DELETE SET NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  UNIQUE (farm_id, plot_code)
+);
+
+CREATE TABLE IF NOT EXISTS activity_types (
+  activity_type_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS machines (
+  machine_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  machine_code TEXT UNIQUE NOT NULL,
+  machine_name TEXT NOT NULL,
+  machine_type TEXT NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS farm_memberships (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_id UUID NOT NULL REFERENCES employees(employee_id) ON DELETE CASCADE,
+  farm_id UUID NOT NULL REFERENCES farms(farm_id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  UNIQUE (employee_id, farm_id)
+);
 
 -- ============================================================
--- TABLE 2: dts_submissions
--- One record per farm per day — the master DTS entry.
+-- DTS HEADER / SUBMISSION
 -- ============================================================
+
 CREATE TABLE IF NOT EXISTS dts_submissions (
-  id                    UUID        DEFAULT uuid_generate_v4() PRIMARY KEY,
-  farm_code             VARCHAR(20) NOT NULL REFERENCES farms(farm_code) ON UPDATE CASCADE,
-  submission_date       DATE        NOT NULL DEFAULT CURRENT_DATE,
-  filled_by             VARCHAR(255),
-  reasons_for_deviation TEXT,
-  next_day_plans        TEXT,
-  agronomy_report       TEXT,
-  whatsapp_number       VARCHAR(30),
-  conversation_id       VARCHAR(120),
-  submitted_at          TIMESTAMPTZ DEFAULT NOW()
+  submission_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farm_id UUID NOT NULL REFERENCES farms(farm_id) ON DELETE CASCADE,
+  farm_name_snapshot TEXT,
+  farm_code_snapshot TEXT,
+  report_date DATE NOT NULL,
+  submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  filled_by_employee_id UUID REFERENCES employees(employee_id) ON DELETE SET NULL,
+  deviation_notes TEXT,
+  next_day_plans TEXT,
+  agronomy_report TEXT,
+  UNIQUE (farm_id, report_date)
 );
 
-COMMENT ON TABLE dts_submissions IS 'Daily Task Sheet master record — one per farm per day';
-COMMENT ON COLUMN dts_submissions.conversation_id IS 'Internal ID linking to the WhatsApp conversation session for audit trail';
-
-
 -- ============================================================
--- TABLE 3: machinery_usage
--- Each row = one machine activity entry on the DTS.
+-- MONITORING
 -- ============================================================
-CREATE TABLE IF NOT EXISTS machinery_usage (
-  id                  UUID         DEFAULT uuid_generate_v4() PRIMARY KEY,
-  dts_submission_id   UUID         NOT NULL REFERENCES dts_submissions(id) ON DELETE CASCADE,
-  plot                VARCHAR(100),
-  crop                VARCHAR(150),
-  acres               DECIMAL(10,2),
-  activity_name       VARCHAR(255),
-  machine_type        VARCHAR(100),
-  time_minutes        INTEGER      DEFAULT 0 CHECK (time_minutes >= 0 AND time_minutes < 60),
-  fuel_used_litres    DECIMAL(10,2),
-  created_at          TIMESTAMPTZ  DEFAULT NOW()
+
+CREATE TABLE IF NOT EXISTS dts_monitoring_readings (
+  reading_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  submission_id UUID NOT NULL REFERENCES dts_submissions(submission_id) ON DELETE CASCADE,
+  period TEXT NOT NULL CHECK (period IN ('morning', 'evening')),
+  observation_time TIME NOT NULL,
+  temperature_c NUMERIC,
+  humidity_pct NUMERIC CHECK (humidity_pct BETWEEN 0 AND 100),
+  rainfall_mm NUMERIC CHECK (rainfall_mm >= 0),
+  UNIQUE (submission_id, period)
 );
 
-COMMENT ON TABLE machinery_usage IS 'Individual machinery/equipment activity rows from the DTS Machinery Usage section';
-
-
 -- ============================================================
--- TABLE 4: harvest_records
--- Each row = one harvest entry on the DTS.
+-- COMMON ACTIVITY HEADER
+-- One row per activity entry on the DTS
 -- ============================================================
-CREATE TABLE IF NOT EXISTS harvest_records (
-  id                  UUID         DEFAULT uuid_generate_v4() PRIMARY KEY,
-  dts_submission_id   UUID         NOT NULL REFERENCES dts_submissions(id) ON DELETE CASCADE,
-  plot                VARCHAR(100),
-  crop                VARCHAR(150),
-  acres               DECIMAL(10,2),
-  harvest_cycle_no    VARCHAR(20),
-  harvesting_method   VARCHAR(100),
-  quantity            DECIMAL(12,2),
-  quantity_unit       VARCHAR(50)  DEFAULT 'kg',
-  labour_count        INTEGER,
-  machine             VARCHAR(150),
-  time_minutes        INTEGER      DEFAULT 0 CHECK (time_minutes >= 0 AND time_minutes < 60),
-  expense_amount      DECIMAL(12,2),
-  created_at          TIMESTAMPTZ  DEFAULT NOW()
+
+CREATE TABLE IF NOT EXISTS dts_activity_entries (
+  entry_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  submission_id UUID NOT NULL REFERENCES dts_submissions(submission_id) ON DELETE CASCADE,
+  activity_type_id UUID NOT NULL REFERENCES activity_types(activity_type_id),
+  plot_id UUID REFERENCES farm_plots(plot_id) ON DELETE SET NULL,
+  crop_id UUID REFERENCES crops(crop_id) ON DELETE SET NULL,
+  acres NUMERIC CHECK (acres >= 0),
+  labour_count INT CHECK (labour_count >= 0),
+  duration_minutes INT CHECK (duration_minutes >= 0),
+  expense_amount NUMERIC CHECK (expense_amount >= 0),
+  remarks TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-COMMENT ON TABLE harvest_records IS 'Individual harvest activity rows from the DTS Harvest section';
+CREATE INDEX IF NOT EXISTS idx_dts_activity_entries_submission_id
+  ON dts_activity_entries(submission_id);
 
+CREATE INDEX IF NOT EXISTS idx_dts_activity_entries_activity_type_id
+  ON dts_activity_entries(activity_type_id);
 
--- ============================================================
--- INDEXES — tuned for 600 submissions/day query patterns
--- ============================================================
+CREATE INDEX IF NOT EXISTS idx_dts_activity_entries_plot_id
+  ON dts_activity_entries(plot_id);
 
--- Fast lookup by farm_code (used for validation + analytics)
-CREATE INDEX IF NOT EXISTS idx_farms_code
-  ON farms(farm_code);
-
--- Fast lookup by date (most common query: "show me today's reports")
-CREATE INDEX IF NOT EXISTS idx_dts_date
-  ON dts_submissions(submission_date DESC);
-
--- Fast lookup by farm + date (duplicate check on every submission)
-CREATE INDEX IF NOT EXISTS idx_dts_farm_date
-  ON dts_submissions(farm_code, submission_date);
-
--- Fast join from child tables back to parent DTS
-CREATE INDEX IF NOT EXISTS idx_machinery_dts_id
-  ON machinery_usage(dts_submission_id);
-
-CREATE INDEX IF NOT EXISTS idx_harvest_dts_id
-  ON harvest_records(dts_submission_id);
-
--- WhatsApp number lookup (for farmer history)
-CREATE INDEX IF NOT EXISTS idx_dts_whatsapp
-  ON dts_submissions(whatsapp_number);
-
+CREATE INDEX IF NOT EXISTS idx_dts_activity_entries_crop_id
+  ON dts_activity_entries(crop_id);
 
 -- ============================================================
--- ROW LEVEL SECURITY (RLS)
--- Our Node.js backend uses the service_role key and bypasses RLS.
--- Enable RLS anyway so anon/user keys cannot access raw data.
+-- ACTIVITY-SPECIFIC DETAIL TABLES
+-- Each entry_id should appear once in the relevant detail table
 -- ============================================================
 
-ALTER TABLE farms             ENABLE ROW LEVEL SECURITY;
-ALTER TABLE dts_submissions   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE machinery_usage   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE harvest_records   ENABLE ROW LEVEL SECURITY;
+CREATE TABLE IF NOT EXISTS dts_land_preparation_details (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  entry_id UUID NOT NULL UNIQUE REFERENCES dts_activity_entries(entry_id) ON DELETE CASCADE,
+  activity_name TEXT NOT NULL,
+  machine_id UUID REFERENCES machines(machine_id) ON DELETE SET NULL,
+  time_minutes INT CHECK (time_minutes >= 0),
+  expense_amount NUMERIC CHECK (expense_amount >= 0)
+);
 
--- Allow service_role full access (used by our chatbot backend)
-CREATE POLICY "service_role_all_farms"
-  ON farms FOR ALL
-  USING (auth.role() = 'service_role');
+CREATE TABLE IF NOT EXISTS dts_sowing_transplanting_details (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  entry_id UUID NOT NULL UNIQUE REFERENCES dts_activity_entries(entry_id) ON DELETE CASCADE,
+  seed_rate_per_acre NUMERIC CHECK (seed_rate_per_acre >= 0),
+  plants_sown INT CHECK (plants_sown >= 0),
+  sowing_method TEXT NOT NULL,
+  labour_count INT CHECK (labour_count >= 0),
+  machine_time_minutes INT CHECK (machine_time_minutes >= 0),
+  expense_amount NUMERIC CHECK (expense_amount >= 0)
+);
 
-CREATE POLICY "service_role_all_dts"
-  ON dts_submissions FOR ALL
-  USING (auth.role() = 'service_role');
+CREATE TABLE IF NOT EXISTS dts_irrigation_details (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  entry_id UUID NOT NULL UNIQUE REFERENCES dts_activity_entries(entry_id) ON DELETE CASCADE,
+  irrigation_method TEXT NOT NULL,
+  power_source TEXT CHECK (power_source IN ('solar', 'electricity', 'generator')),
+  labour_count INT CHECK (labour_count >= 0),
+  time_minutes INT CHECK (time_minutes >= 0),
+  fuel_used_litres NUMERIC CHECK (fuel_used_litres >= 0),
+  expense_amount NUMERIC CHECK (expense_amount >= 0)
+);
 
-CREATE POLICY "service_role_all_machinery"
-  ON machinery_usage FOR ALL
-  USING (auth.role() = 'service_role');
+CREATE TABLE IF NOT EXISTS dts_weeding_details (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  entry_id UUID NOT NULL UNIQUE REFERENCES dts_activity_entries(entry_id) ON DELETE CASCADE,
+  weeding_method TEXT NOT NULL,
+  labour_count INT CHECK (labour_count >= 0),
+  input_name TEXT,
+  input_qty NUMERIC CHECK (input_qty >= 0),
+  time_minutes INT CHECK (time_minutes >= 0),
+  expense_amount NUMERIC CHECK (expense_amount >= 0)
+);
 
-CREATE POLICY "service_role_all_harvest"
-  ON harvest_records FOR ALL
-  USING (auth.role() = 'service_role');
+CREATE TABLE IF NOT EXISTS dts_agri_input_details (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  entry_id UUID NOT NULL UNIQUE REFERENCES dts_activity_entries(entry_id) ON DELETE CASCADE,
+  input_method TEXT NOT NULL,
+  input_type TEXT NOT NULL,
+  input_name TEXT NOT NULL,
+  input_qty NUMERIC CHECK (input_qty >= 0),
+  labour_count INT CHECK (labour_count >= 0),
+  time_minutes INT CHECK (time_minutes >= 0),
+  expense_amount NUMERIC CHECK (expense_amount >= 0)
+);
 
+CREATE TABLE IF NOT EXISTS dts_other_machinery_details (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  entry_id UUID NOT NULL UNIQUE REFERENCES dts_activity_entries(entry_id) ON DELETE CASCADE,
+  machine_id UUID REFERENCES machines(machine_id) ON DELETE SET NULL,
+  machine_code_snapshot TEXT,
+  time_minutes INT CHECK (time_minutes >= 0),
+  fuel_used_litres NUMERIC CHECK (fuel_used_litres >= 0)
+);
 
--- ============================================================
--- VIEWS — handy for the admin dashboard / reporting
--- ============================================================
-
--- Daily summary: one row per DTS with aggregated counts
-CREATE OR REPLACE VIEW v_daily_summary AS
-SELECT
-  d.id                                        AS submission_id,
-  d.farm_code,
-  f.owner_name,
-  f.location,
-  d.submission_date,
-  d.filled_by,
-  d.submitted_at,
-  d.reasons_for_deviation,
-  d.next_day_plans,
-  d.agronomy_report,
-  COUNT(DISTINCT m.id)                        AS machinery_entries,
-  COALESCE(SUM(m.fuel_used_litres), 0)        AS total_fuel_litres,
-  COUNT(DISTINCT h.id)                        AS harvest_entries,
-  COALESCE(SUM(h.quantity), 0)                AS total_harvest_qty,
-  MIN(h.quantity_unit)                        AS harvest_unit
-FROM dts_submissions d
-JOIN farms f ON f.farm_code = d.farm_code
-LEFT JOIN machinery_usage m ON m.dts_submission_id = d.id
-LEFT JOIN harvest_records h ON h.dts_submission_id = d.id
-GROUP BY
-  d.id, d.farm_code, f.owner_name, f.location,
-  d.submission_date, d.filled_by, d.submitted_at,
-  d.reasons_for_deviation, d.next_day_plans, d.agronomy_report;
-
-COMMENT ON VIEW v_daily_summary IS 'Aggregated daily view — use for dashboard and reporting';
-
-
--- Farms that have NOT submitted today (for follow-up alerts)
-CREATE OR REPLACE VIEW v_missing_submissions_today AS
-SELECT
-  f.farm_code,
-  f.owner_name,
-  f.location
-FROM farms f
-WHERE f.active = TRUE
-  AND f.farm_code NOT IN (
-    SELECT farm_code
-    FROM dts_submissions
-    WHERE submission_date = CURRENT_DATE
-  );
-
-COMMENT ON VIEW v_missing_submissions_today IS 'Farms that have not yet submitted their DTS today';
-
-
--- ============================================================
--- AUTO-UPDATE updated_at trigger on farms
--- ============================================================
-CREATE OR REPLACE FUNCTION update_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_farms_updated_at
-  BEFORE UPDATE ON farms
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TABLE IF NOT EXISTS dts_harvest_details (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  entry_id UUID NOT NULL UNIQUE REFERENCES dts_activity_entries(entry_id) ON DELETE CASCADE,
+  harvest_cycle_no INT CHECK (harvest_cycle_no > 0),
+  harvesting_method TEXT NOT NULL,
+  quantity NUMERIC CHECK (quantity >= 0),
+  unit TEXT NOT NULL,
+  labour_count INT CHECK (labour_count >= 0),
+  machine_time_minutes INT CHECK (machine_time_minutes >= 0),
+  expense_amount NUMERIC CHECK (expense_amount >= 0)
+);
 
 -- ============================================================
--- RPC FUNCTION — transactions
+-- OPTIONAL QUALITY CHECKS
+-- ============================================================
+
+ALTER TABLE farm_plots
+  ADD CONSTRAINT chk_farm_plots_acres_positive
+  CHECK (acres IS NULL OR acres > 0);
+
+ALTER TABLE dts_submissions
+  ADD CONSTRAINT chk_report_date_not_future
+  CHECK (report_date <= CURRENT_DATE);
+
+ALTER TABLE dts_activity_entries
+  ADD CONSTRAINT chk_activity_acres_nonnegative
+  CHECK (acres IS NULL OR acres >= 0);
+
+-- ============================================================
+-- OPTIONAL SEED DATA FOR ACTIVITY TYPES
+-- ============================================================
+
+INSERT INTO activity_types (name) VALUES
+  ('land_preparation'),
+  ('sowing_transplanting'),
+  ('irrigation'),
+  ('weeding'),
+  ('agri_inputs'),
+  ('other_machinery_usage'),
+  ('harvest')
+ON CONFLICT (name) DO NOTHING;
+
+-- ============================================================
+-- RPC FUNCTION FOR SUBMISSIONS
 -- ============================================================
 CREATE OR REPLACE FUNCTION submit_full_dts(payload jsonb) RETURNS json AS $$
 DECLARE
-  v_dts_id UUID;
+  v_submission_id UUID;
+  v_entry_id UUID;
+  v_activity_type_id UUID;
   item jsonb;
 BEGIN
   -- 1. Insert main DTS record
   INSERT INTO dts_submissions (
-    farm_code, submission_date, filled_by, 
-    reasons_for_deviation, next_day_plans, agronomy_report, 
-    whatsapp_number, conversation_id
+    farm_id, 
+    farm_code_snapshot, 
+    farm_name_snapshot, 
+    report_date, 
+    filled_by_employee_id, 
+    deviation_notes, 
+    next_day_plans, 
+    agronomy_report
   )
   VALUES (
-    payload->>'farmCode', 
-    (payload->>'date')::date, 
-    payload->>'filledBy',
-    payload->>'reasonsForDeviation', 
-    payload->>'nextDayPlans', 
-    payload->>'agronomyReport',
-    payload->>'whatsappNumber', 
-    payload->>'conversationId'
+    (payload->>'farm_id')::UUID, 
+    payload->>'farm_code_snapshot', 
+    payload->>'farm_name_snapshot', 
+    (payload->>'report_date')::DATE, 
+    NULLIF((payload->>'filled_by_employee_id'), '')::UUID,
+    payload->>'deviation_notes', 
+    payload->>'next_day_plans', 
+    payload->>'agronomy_report'
   )
-  RETURNING id INTO v_dts_id;
+  ON CONFLICT (farm_id, report_date) DO UPDATE SET
+    deviation_notes = EXCLUDED.deviation_notes,
+    next_day_plans = EXCLUDED.next_day_plans,
+    agronomy_report = EXCLUDED.agronomy_report,
+    submitted_at = now()
+  RETURNING submission_id INTO v_submission_id;
 
-  -- 2. Insert machinery_usage
-  IF jsonb_typeof(payload->'machineryUsage') = 'array' THEN
-    FOR item IN SELECT * FROM jsonb_array_elements(payload->'machineryUsage')
+  -- 2. Insert activities
+  IF jsonb_typeof(payload->'activities') = 'array' THEN
+    FOR item IN SELECT * FROM jsonb_array_elements(payload->'activities')
     LOOP
-      INSERT INTO machinery_usage (
-        dts_submission_id, plot, crop, acres, activity_name, 
-        machine_type, machine_code, time_hours, time_minutes, fuel_used_litres
+      -- Get activity_type_id based on name
+      SELECT activity_type_id INTO v_activity_type_id 
+      FROM activity_types 
+      WHERE name = item->>'activity_type_name';
+
+      -- Insert into generic activity entries
+      INSERT INTO dts_activity_entries (
+        submission_id, 
+        activity_type_id, 
+        plot_id, 
+        crop_id, 
+        acres, 
+        labour_count, 
+        duration_minutes, 
+        expense_amount, 
+        remarks
       )
       VALUES (
-        v_dts_id, 
-        item->>'plot', 
-        item->>'crop', 
+        v_submission_id, 
+        v_activity_type_id, 
+        NULLIF((item->>'plot_id'), '')::UUID, 
+        NULLIF((item->>'crop_id'), '')::UUID, 
         NULLIF((item->>'acres'), '')::numeric, 
-        item->>'activityName', 
-        item->>'machineType', 
-        item->>'machineCode', 
-        COALESCE(NULLIF((item->>'timeHours'), '')::int, 0), 
-        COALESCE(NULLIF((item->>'timeMinutes'), '')::int, 0), 
-        NULLIF((item->>'fuelUsed'), '')::numeric
-      );
+        NULLIF((item->>'labour_count'), '')::int, 
+        NULLIF((item->>'duration_minutes'), '')::int, 
+        NULLIF((item->>'expense_amount'), '')::numeric, 
+        item->>'remarks'
+      )
+      RETURNING entry_id INTO v_entry_id;
+
+      -- Insert into specific detail tables
+      IF item->>'activity_type_name' = 'land_preparation' THEN
+        INSERT INTO dts_land_preparation_details (entry_id, activity_name, machine_id, time_minutes, expense_amount)
+        VALUES (v_entry_id, item->'details'->>'activity_name', NULLIF((item->'details'->>'machine_id'), '')::UUID, NULLIF((item->'details'->>'time_minutes'), '')::int, NULLIF((item->'details'->>'expense_amount'), '')::numeric);
+
+      ELSIF item->>'activity_type_name' = 'sowing_transplanting' THEN
+        -- Also update the current crop in farm_plots
+        IF item->>'plot_id' IS NOT NULL AND item->>'crop_id' IS NOT NULL THEN
+          UPDATE farm_plots SET current_crop_id = (item->>'crop_id')::UUID WHERE plot_id = (item->>'plot_id')::UUID;
+        END IF;
+        
+        INSERT INTO dts_sowing_transplanting_details (entry_id, seed_rate_per_acre, plants_sown, sowing_method, labour_count, machine_time_minutes, expense_amount)
+        VALUES (v_entry_id, NULLIF((item->'details'->>'seed_rate_per_acre'), '')::numeric, NULLIF((item->'details'->>'plants_sown'), '')::int, item->'details'->>'sowing_method', NULLIF((item->'details'->>'labour_count'), '')::int, NULLIF((item->'details'->>'machine_time_minutes'), '')::int, NULLIF((item->'details'->>'expense_amount'), '')::numeric);
+
+      ELSIF item->>'activity_type_name' = 'irrigation' THEN
+        INSERT INTO dts_irrigation_details (entry_id, irrigation_method, power_source, labour_count, time_minutes, fuel_used_litres, expense_amount)
+        VALUES (v_entry_id, item->'details'->>'irrigation_method', item->'details'->>'power_source', NULLIF((item->'details'->>'labour_count'), '')::int, NULLIF((item->'details'->>'time_minutes'), '')::int, NULLIF((item->'details'->>'fuel_used_litres'), '')::numeric, NULLIF((item->'details'->>'expense_amount'), '')::numeric);
+
+      ELSIF item->>'activity_type_name' = 'weeding' THEN
+        INSERT INTO dts_weeding_details (entry_id, weeding_method, labour_count, input_name, input_qty, time_minutes, expense_amount)
+        VALUES (v_entry_id, item->'details'->>'weeding_method', NULLIF((item->'details'->>'labour_count'), '')::int, item->'details'->>'input_name', NULLIF((item->'details'->>'input_qty'), '')::numeric, NULLIF((item->'details'->>'time_minutes'), '')::int, NULLIF((item->'details'->>'expense_amount'), '')::numeric);
+
+      ELSIF item->>'activity_type_name' = 'agri_inputs' THEN
+        INSERT INTO dts_agri_input_details (entry_id, input_method, input_type, input_name, input_qty, labour_count, time_minutes, expense_amount)
+        VALUES (v_entry_id, item->'details'->>'input_method', item->'details'->>'input_type', item->'details'->>'input_name', NULLIF((item->'details'->>'input_qty'), '')::numeric, NULLIF((item->'details'->>'labour_count'), '')::int, NULLIF((item->'details'->>'time_minutes'), '')::int, NULLIF((item->'details'->>'expense_amount'), '')::numeric);
+
+      ELSIF item->>'activity_type_name' = 'other_machinery_usage' THEN
+        INSERT INTO dts_other_machinery_details (entry_id, machine_id, machine_code_snapshot, time_minutes, fuel_used_litres)
+        VALUES (v_entry_id, NULLIF((item->'details'->>'machine_id'), '')::UUID, item->'details'->>'machine_code_snapshot', NULLIF((item->'details'->>'time_minutes'), '')::int, NULLIF((item->'details'->>'fuel_used_litres'), '')::numeric);
+
+      ELSIF item->>'activity_type_name' = 'harvest' THEN
+        -- Clear current crop in farm_plots upon harvest
+        IF item->>'plot_id' IS NOT NULL THEN
+          UPDATE farm_plots SET current_crop_id = NULL WHERE plot_id = (item->>'plot_id')::UUID;
+        END IF;
+
+        INSERT INTO dts_harvest_details (entry_id, harvest_cycle_no, harvesting_method, quantity, unit, labour_count, machine_time_minutes, expense_amount)
+        VALUES (v_entry_id, NULLIF((item->'details'->>'harvest_cycle_no'), '')::int, item->'details'->>'harvesting_method', NULLIF((item->'details'->>'quantity'), '')::numeric, item->'details'->>'unit', NULLIF((item->'details'->>'labour_count'), '')::int, NULLIF((item->'details'->>'machine_time_minutes'), '')::int, NULLIF((item->'details'->>'expense_amount'), '')::numeric);
+      END IF;
     END LOOP;
   END IF;
 
-  -- 3. Insert harvest_records
-  IF jsonb_typeof(payload->'harvest') = 'array' THEN
-    FOR item IN SELECT * FROM jsonb_array_elements(payload->'harvest')
-    LOOP
-      INSERT INTO harvest_records (
-        dts_submission_id, plot, crop, acres, harvest_cycle_no, harvesting_method, 
-        quantity, quantity_unit, labour_count, machine, time_hours, time_minutes, 
-        expense_type, expense_amount
-      )
-      VALUES (
-        v_dts_id, 
-        item->>'plot', 
-        item->>'crop', 
-        NULLIF((item->>'acres'), '')::numeric, 
-        item->>'harvestCycleNo', 
-        item->>'harvestingMethod', 
-        NULLIF((item->>'quantity'), '')::numeric, 
-        COALESCE(item->>'quantityUnit', 'kg'), 
-        NULLIF((item->>'labourCount'), '')::int, 
-        item->>'machine', 
-        COALESCE(NULLIF((item->>'timeHours'), '')::int, 0), 
-        COALESCE(NULLIF((item->>'timeMinutes'), '')::int, 0), 
-        item->>'expenseType', 
-        NULLIF((item->>'expenseAmount'), '')::numeric
-      );
-    END LOOP;
-  END IF;
-
-  RETURN json_build_object('id', v_dts_id);
+  RETURN json_build_object('submission_id', v_submission_id);
 END;
 $$ LANGUAGE plpgsql;

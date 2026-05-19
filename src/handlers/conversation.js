@@ -1,297 +1,381 @@
 /**
- * Conversation Handler
- * Central state machine that drives the entire farmer ↔ bot interaction.
- *
- * States:
- *   AWAITING_FARM_CODE  →  COLLECTING_DATA  →  COMPLETED
- *
- * Handles 600+ concurrent sessions safely via Redis-backed state.
+ * Conversation Handler (Rule-Based Agent)
+ * Implements the strict 6-step conversational flow.
  */
 
 const sessionService = require('../services/session');
 const whatsappService = require('../services/whatsapp');
 const openaiService = require('../services/openai');
 const supabaseService = require('../services/supabase');
-const config = require('../config');
 
-// ─────────────────────────────────────────────
-// STATIC MESSAGES
-// ─────────────────────────────────────────────
-
-const MSG_GREETING = `Welcome to Zetta Farms Daily Reporting!
-
-Please send your Farm Code to begin.
-Example: ZF-001`;
-
-const MSG_INVALID_CODE = `That farm code was not found. Please check and try again.
-
-Your code should look like: ZF-001`;
-
-const MSG_ERROR = `Sorry, something went wrong. Please try again in a moment. If this keeps happening, contact your supervisor.`;
-
-const MSG_DUPLICATE_WARNING = (existingTime) =>
-  `Note: A DTS for your farm was already submitted today at ${existingTime}. This will add a new entry. Continue? (yes/no)`;
-
-// ─────────────────────────────────────────────
-// MAIN ENTRY POINT
-// Called by the webhook for every incoming message.
-// ─────────────────────────────────────────────
+const ACTIVITY_TYPES = [
+  { id: 1, name: 'land_preparation', label: 'Land Preparation' },
+  { id: 2, name: 'sowing_transplanting', label: 'Sowing / Transplanting' },
+  { id: 3, name: 'irrigation', label: 'Irrigation' },
+  { id: 4, name: 'weeding', label: 'Weeding' },
+  { id: 5, name: 'agri_inputs', label: 'Agri Inputs (Fertilizer/Pesticide)' },
+  { id: 6, name: 'other_machinery_usage', label: 'Other Machinery Usage' },
+  { id: 7, name: 'harvest', label: 'Harvest' }
+];
 
 async function handleIncomingMessage(from, body) {
-  // Guard: ignore empty messages
   if (!body || body.trim().length === 0) return;
+  const msg = body.trim();
 
   let session = await sessionService.getSession(from);
 
-  // ── Brand new conversation ──────────────────
   if (!session) {
     session = await sessionService.createSession(from);
-    await whatsappService.sendMessage(from, MSG_GREETING);
+    await whatsappService.sendMessage(from, `Welcome to Zetta Farms Daily Reporting!\n\nPlease send your Farm Code to begin (e.g. ZF-001).`);
     return;
   }
 
-  // ── Route based on current state ───────────
-  switch (session.state) {
-    case 'AWAITING_FARM_CODE':
-      await handleFarmCode(from, body.trim(), session);
-      break;
-
-    case 'AWAITING_DUPLICATE_CONFIRM':
-      await handleDuplicateConfirm(from, body.trim(), session);
-      break;
-
-    case 'COLLECTING_DATA':
-      await handleDataCollection(from, body.trim(), session);
-      break;
-
-    case 'COMPLETED':
-      // They're messaging again after completing — start fresh
-      await sessionService.deleteSession(from);
-      const newSession = await sessionService.createSession(from);
-      await whatsappService.sendMessage(from, MSG_GREETING);
-      break;
-
-    default:
-      await sessionService.deleteSession(from);
-      await sessionService.createSession(from);
-      await whatsappService.sendMessage(from, MSG_GREETING);
+  try {
+    switch (session.state) {
+      case 'AWAITING_FARM_CODE':
+        await handleFarmCode(from, msg, session);
+        break;
+      case 'ONBOARDING_PLOTS':
+        await handleOnboarding(from, msg, session);
+        break;
+      case 'ASK_ACTIVITIES':
+        await handleSelectActivities(from, msg, session);
+        break;
+      case 'LOOP_ACTIVITIES':
+        await handleActivityLoop(from, msg, session);
+        break;
+      case 'MISSING_FIELDS':
+        await handleMissingFields(from, msg, session);
+        break;
+      case 'FINAL_REVIEW':
+        await handleFinalReview(from, msg, session);
+        break;
+      case 'ASK_MORE_ACTIVITIES':
+        await handleMoreActivities(from, msg, session);
+        break;
+      case 'CONFIRM_DELETE':
+        await handleConfirmDelete(from, msg, session);
+        break;
+      default:
+        await sessionService.deleteSession(from);
+        await whatsappService.sendMessage(from, "Session reset. Please send your Farm Code.");
+    }
+  } catch (err) {
+    console.error('Conversation Error:', err);
+    await whatsappService.sendMessage(from, `Sorry, an error occurred. Please try again.`);
   }
 }
 
 // ─────────────────────────────────────────────
-// STATE: AWAITING_FARM_CODE
+// STEP 1: FARM VERIFICATION
 // ─────────────────────────────────────────────
 
-async function handleFarmCode(from, input, session) {
-  const farmCode = input.toUpperCase().replace(/\s/g, '');
-
-  const farm = await supabaseService.validateFarmCode(farmCode);
+async function handleFarmCode(from, msg, session) {
+  const code = msg.toUpperCase();
+  const farm = await supabaseService.validateFarmCode(code);
 
   if (!farm) {
-    await whatsappService.sendMessage(from, MSG_INVALID_CODE);
-    return;
+    return whatsappService.sendMessage(from, `Farm code not found. Try again:`);
   }
 
-  // Check for duplicate submission today
-  const istOffsetMs = 5.5 * 60 * 60 * 1000;
-  const today = new Date(Date.now() + istOffsetMs).toISOString().split('T')[0];
-  const existing = await supabaseService.checkDuplicateSubmission(farmCode, today);
-
-  if (existing) {
-    const time = new Date(existing.submitted_at).toLocaleTimeString('en-IN', {
-      hour: '2-digit', minute: '2-digit',
-    });
-    session.pendingFarmCode = farmCode;
-    session.pendingFarmName = farm.farm_name;
-    session.state = 'AWAITING_DUPLICATE_CONFIRM';
-    await sessionService.setSession(from, session);
-    await whatsappService.sendMessage(from, MSG_DUPLICATE_WARNING(time));
-    return;
-  }
-
-  await activateFarmSession(from, session, farm);
-}
-
-// ─────────────────────────────────────────────
-// STATE: AWAITING_DUPLICATE_CONFIRM
-// ─────────────────────────────────────────────
-
-async function handleDuplicateConfirm(from, input, session) {
-  const lower = input.toLowerCase();
-  if (lower.includes('yes') || lower.includes('y') || lower.includes('ok') || lower.includes('haan')) {
-    // Proceed with duplicate farm code
-    const farm = { farm_code: session.pendingFarmCode, farm_name: session.pendingFarmName };
-    await activateFarmSession(from, session, farm);
-  } else {
-    await whatsappService.sendMessage(from, `Okay, submission cancelled. Send your Farm Code again when you are ready.`);
-    session.state = 'AWAITING_FARM_CODE';
-    session.pendingFarmCode = null;
-    session.pendingFarmName = null;
-    await sessionService.setSession(from, session);
-  }
-}
-
-// ─────────────────────────────────────────────
-// Helper: Activate farm session → start collecting
-// ─────────────────────────────────────────────
-
-async function activateFarmSession(from, session, farm) {
-  const istOffsetMs = 5.5 * 60 * 60 * 1000;
-  const today = new Date(Date.now() + istOffsetMs).toISOString().split('T')[0];
-  const greeting = getTimeGreeting();
-
-  session.state = 'COLLECTING_DATA';
+  session.farmId = farm.farm_id;
   session.farmCode = farm.farm_code;
   session.farmName = farm.farm_name;
-  session.date = today;
-  session.conversationId = `${farm.farm_code}-${Date.now()}`;
-  session.conversationHistory = [];
-  session.turnCount = 0;
 
+  const dbCache = await supabaseService.getFarmDetails(farm.farm_id);
+  session.dbCache = dbCache;
+
+  // Step 2 Branching: If no plots exist, do onboarding
+  if (dbCache.plots.length === 0) {
+    session.state = 'ONBOARDING_PLOTS';
+    await sessionService.setSession(from, session);
+    return whatsappService.sendMessage(from, `We need to set up your plots for ${farm.farm_name}.\n\nPlease reply with a list of your plots and their current crops (e.g. "A1 has Sugarcane, A2 has Cotton").`);
+  }
+
+  // Else directly to Step 3
+  await promptActivities(from, session);
+}
+
+// ─────────────────────────────────────────────
+// STEP 2: ONBOARDING
+// ─────────────────────────────────────────────
+
+async function handleOnboarding(from, msg, session) {
+  // A simple heuristic for parsing "A1 sugarcane, A2 wheat"
+  // For production, a 1-shot LLM call is better, but doing simple split here:
+  const parts = msg.split(',').map(s => s.trim());
+  const plotsData = [];
+  
+  for (const part of parts) {
+    const tokens = part.split(/\s+/);
+    if (tokens.length >= 2) {
+      plotsData.push({ plot_code: tokens[0], crop_name: tokens[tokens.length - 1] });
+    }
+  }
+
+  if (plotsData.length === 0) {
+    return whatsappService.sendMessage(from, `Could not understand the plots. Please use format: "A1 Sugarcane, A2 Cotton"`);
+  }
+
+  await supabaseService.saveFarmOnboarding(session.farmId, plotsData);
+  
+  // Refresh cache
+  session.dbCache = await supabaseService.getFarmDetails(session.farmId);
+  
+  await whatsappService.sendMessage(from, `Great! Saved ${plotsData.length} plots.`);
+  await promptActivities(from, session);
+}
+
+// ─────────────────────────────────────────────
+// STEP 3: ASK ACTIVITIES
+// ─────────────────────────────────────────────
+
+async function promptActivities(from, session) {
+  session.state = 'ASK_ACTIVITIES';
   await sessionService.setSession(from, session);
 
-  const welcomeMsg =
-    `Farm verified: ${farm.farm_name} (${farm.farm_code})` +
-    `\n\nGood ${greeting}! Tell me what activities were carried out on the farm today.`;
+  let text = `Which activities were done today? Reply with numbers (e.g., "3, 4"):\n`;
+  ACTIVITY_TYPES.forEach(a => text += `\n${a.id}. ${a.label}`);
+  await whatsappService.sendMessage(from, text);
+}
 
-  await whatsappService.sendMessage(from, welcomeMsg);
+async function handleSelectActivities(from, msg, session) {
+  const nums = msg.match(/\d+/g);
+  if (!nums) return whatsappService.sendMessage(from, `Please send numbers matching the menu.`);
+
+  const selected = nums.map(n => parseInt(n)).filter(n => n >= 1 && n <= 7);
+  if (selected.length === 0) return whatsappService.sendMessage(from, `Invalid selection.`);
+
+  const newActivities = selected.map(n => ACTIVITY_TYPES.find(a => a.id === n).name);
+  
+  // Initialize queues
+  session.selectedActivities = newActivities;
+  session.currentActivityIndex = 0;
+  session.collectedRaw = {};
+  
+  session.state = 'LOOP_ACTIVITIES';
+  await sessionService.setSession(from, session);
+
+  await askNextActivity(from, session);
 }
 
 // ─────────────────────────────────────────────
-// STATE: COLLECTING_DATA
-// Core conversation loop powered by GPT-4
+// STEP 4: ACTIVITY LOOP
 // ─────────────────────────────────────────────
 
-async function handleDataCollection(from, message, session) {
-  try {
-    // Increment turn counter
-    session.turnCount = (session.turnCount || 0) + 1;
+async function askNextActivity(from, session) {
+  if (session.currentActivityIndex >= session.selectedActivities.length) {
+    // All activities answered! Call LLM 1
+    return runAIParsing(from, session);
+  }
 
-    // Detect manual exit phrases OR max turns
-    const isExit = openaiService.isExitPhrase(message);
-    const hitMaxTurns = session.turnCount > config.conversation.maxTurns;
+  const actName = session.selectedActivities[session.currentActivityIndex];
+  const label = ACTIVITY_TYPES.find(a => a.name === actName).label;
+  
+  await whatsappService.sendMessage(from, `Please provide the details for *${label}*\n(Include Plot, Crop, Time spent, Labour count, etc.)`);
+}
 
-    // Build farm context for AI
-    const farmCtx = {
-      farmCode: session.farmCode,
-      farmName: session.farmName,
-      date: session.date,
-    };
+async function handleActivityLoop(from, msg, session) {
+  const actName = session.selectedActivities[session.currentActivityIndex];
+  session.collectedRaw[actName] = msg;
+  
+  session.currentActivityIndex++;
+  await sessionService.setSession(from, session);
+  await askNextActivity(from, session);
+}
 
-    if (isExit || hitMaxTurns) {
-      if (hitMaxTurns) console.warn(`⚠️  Max turns reached for ${from}. Auto-saving.`);
-      await whatsappService.sendMessage(from, `Saving your report now, please wait...`);
-      
-      const finalPrompt = "The user has completed the report. Please output the final <SAVE_DATA> block now with all observed details.";
-      const historyWindow = session.conversationHistory.slice(-20);
-      
-      const aiRaw = await openaiService.processMessage(historyWindow, finalPrompt, farmCtx);
-      const saveData = openaiService.extractSaveData(aiRaw);
-      
-      await sessionService.setSession(from, session);
-      await handleSubmission(from, session, saveData || session.collectedData);
-      return;
+// ─────────────────────────────────────────────
+// STEP 4b: LLM PARSING & MISSING FIELDS
+// ─────────────────────────────────────────────
+
+async function runAIParsing(from, session) {
+  await whatsappService.sendMessage(from, `Analyzing your report...`);
+  
+  // Build transcript
+  let transcript = '';
+  for (const act of session.selectedActivities) {
+    transcript += `Activity [${act}]: ${session.collectedRaw[act]}\n`;
+  }
+
+  // Call 1: Parse unstructured -> JSON
+  const parsed = await openaiService.parseActivities(transcript, session.dbCache);
+  
+  if (!parsed || !parsed.activities) {
+    return whatsappService.sendMessage(from, `Failed to analyze text. Please try again.`);
+  }
+
+  session.parsedJSON = parsed;
+
+  // Build missing fields queue
+  session.missingFieldsQueue = [];
+  parsed.activities.forEach((act, idx) => {
+    ['plot_name', 'labour_count', 'duration_minutes'].forEach(field => {
+      if (act[field] === null) {
+        session.missingFieldsQueue.push({ activityIndex: idx, actName: act.activity_type_name, field, isDetail: false });
+      }
+    });
+    // Check specific details
+    if (act.details) {
+      Object.keys(act.details).forEach(key => {
+        if (act.details[key] === null) {
+          session.missingFieldsQueue.push({ activityIndex: idx, actName: act.activity_type_name, field: key, isDetail: true });
+        }
+      });
     }
+  });
 
-    // Add farmer's message to history
-    session.conversationHistory.push({ role: 'user', content: message });
-
-    // Keep only the last 20 turns in history to control token usage
-    const historyWindow = session.conversationHistory.slice(-20);
-
-    // Get AI response
-    const aiRaw = await openaiService.processMessage(historyWindow, message, farmCtx);
-
-    // Check if AI has decided to save
-    const saveData = openaiService.extractSaveData(aiRaw);
-    const aiMessage = openaiService.cleanResponse(aiRaw);
-
-    // Add AI response to history (without the SAVE_DATA block)
-    session.conversationHistory.push({ role: 'assistant', content: aiMessage });
-
-    if (saveData) {
-      // AI has collected enough and wants to save
-      await sessionService.setSession(from, session);
-      await handleSubmission(from, session, saveData);
-      return;
-    }
-
-    // Continue conversation
+  if (session.missingFieldsQueue.length > 0) {
+    session.state = 'MISSING_FIELDS';
     await sessionService.setSession(from, session);
-    await whatsappService.sendMessage(from, aiMessage);
+    await askNextMissingField(from, session);
+  } else {
+    // No missing fields! Go straight to LLM 2
+    await runAIValidation(from, session);
+  }
+}
 
-  } catch (err) {
-    console.error(`❌ Data collection error for ${from}:`, err.message);
-    // Save session even on error so we don't lose data
-    await sessionService.setSession(from, session).catch(() => {});
-    await whatsappService.sendMessage(from, MSG_ERROR);
+async function askNextMissingField(from, session) {
+  const missing = session.missingFieldsQueue[0];
+  const label = ACTIVITY_TYPES.find(a => a.name === missing.actName).label;
+  const friendlyField = missing.field.replace(/_/g, ' ');
+
+  await whatsappService.sendMessage(from, `For *${label}*, what was the ${friendlyField}?`);
+}
+
+async function handleMissingFields(from, msg, session) {
+  const missing = session.missingFieldsQueue.shift();
+  
+  // Inject raw string into JSON (NO LLM CALL YET)
+  const act = session.parsedJSON.activities[missing.activityIndex];
+  if (missing.isDetail) {
+    act.details[missing.field] = msg;
+  } else {
+    act[missing.field] = msg;
+  }
+
+  if (session.missingFieldsQueue.length > 0) {
+    await sessionService.setSession(from, session);
+    await askNextMissingField(from, session);
+  } else {
+    // All filled! Call LLM 2
+    await runAIValidation(from, session);
   }
 }
 
 // ─────────────────────────────────────────────
-// SUBMIT: Save to Supabase
+// STEP 4c: LLM VALIDATION & NORMALIZATION
 // ─────────────────────────────────────────────
 
-async function handleSubmission(from, session, saveData) {
-  try {
-    // Merge AI-extracted data with session's collected data
-    const finalData = saveData || session.collectedData;
+async function runAIValidation(from, session) {
+  await whatsappService.sendMessage(from, `Validating final data...`);
 
-    const submissionPayload = {
-      farmCode: session.farmCode,
-      date: session.date || new Date().toISOString().split('T')[0],
-      filledBy: finalData.filledBy || null,
-      reasonsForDeviation: finalData.reasonsForDeviation || null,
-      nextDayPlans: finalData.nextDayPlans || null,
-      agronomyReport: finalData.agronomyReport || null,
-      machineryUsage: finalData.machineryUsage || [],
-      harvest: finalData.harvest || [],
-      whatsappNumber: from,
-      conversationId: session.conversationId,
-    };
+  // Call 2: Normalize the filled JSON
+  const normalized = await openaiService.normalizeAndValidate(session.parsedJSON, session.dbCache);
 
-    const saved = await supabaseService.saveDTSSubmission(submissionPayload);
+  if (!normalized) {
+    return whatsappService.sendMessage(from, `Validation failed.`);
+  }
 
-    // Build a brief summary for the confirmation message
-    const machCount = submissionPayload.machineryUsage.length;
-    const harvCount = submissionPayload.harvest.length;
-    const refId = saved.id.slice(0, 8).toUpperCase();
+  session.parsedJSON = normalized;
+  session.state = 'FINAL_REVIEW';
+  await sessionService.setSession(from, session);
 
-    const confirmMsg =
-      `Daily Task Sheet Submitted!` +
-      `\n\nFarm: ${session.farmName}` +
-      `\nDate: ${new Date(session.date).toLocaleDateString('en-IN')}` +
-      `\nMachinery entries: ${machCount}` +
-      `\nHarvest entries: ${harvCount}` +
-      `\nReference ID: ${refId}` +
-      `\n\nThank you! Have a good evening.`;
+  await whatsappService.sendMessage(from, `Are you done, or do you have more activities to report? (Reply Yes to submit, No to add more)`);
+}
 
-    await whatsappService.sendMessage(from, confirmMsg);
+// ─────────────────────────────────────────────
+// STEP 5 & 6: FINAL REVIEW
+// ─────────────────────────────────────────────
 
-    // Mark session done (kept in Redis for 1 hour so re-messages start fresh)
-    session.state = 'COMPLETED';
-    session.submissionId = saved.id;
+async function handleFinalReview(from, msg, session) {
+  const lower = msg.toLowerCase();
+  if (lower.includes('yes') || lower.includes('y') || lower.includes('done')) {
+    // SUBMIT
+    await submitToDB(from, session);
+  } else {
+    // Step 6
+    session.state = 'ASK_MORE_ACTIVITIES';
     await sessionService.setSession(from, session);
+    let text = `Which OTHER activities were done today? Reply with numbers (e.g., "3, 4"):\n`;
+    ACTIVITY_TYPES.forEach(a => text += `\n${a.id}. ${a.label}`);
+    await whatsappService.sendMessage(from, text);
+  }
+}
 
-  } catch (err) {
-    console.error(`❌ Submission error for ${from}:`, err.message);
-    await whatsappService.sendMessage(
-      from,
-      `Sorry, there was an error saving your report (${err.message}). Please contact your supervisor with your farm code: ${session.farmCode}`
-    );
+async function handleMoreActivities(from, msg, session) {
+  const nums = msg.match(/\d+/g);
+  if (!nums) return;
+
+  const selected = nums.map(n => parseInt(n)).filter(n => n >= 1 && n <= 7);
+  const newActivities = selected.map(n => ACTIVITY_TYPES.find(a => a.id === n).name);
+
+  // Check conflicts
+  const conflict = newActivities.find(act => session.selectedActivities.includes(act));
+  if (conflict) {
+    session.state = 'CONFIRM_DELETE';
+    session.conflictAct = conflict;
+    await sessionService.setSession(from, session);
+    const label = ACTIVITY_TYPES.find(a => a.name === conflict).label;
+    return whatsappService.sendMessage(from, `Record already entered for *${label}*. Do you want to delete and re-enter? (Yes/No)`);
+  }
+
+  // No conflict, just append
+  session.selectedActivities.push(...newActivities);
+  session.currentActivityIndex = session.selectedActivities.length - newActivities.length;
+  session.state = 'LOOP_ACTIVITIES';
+  await sessionService.setSession(from, session);
+  await askNextActivity(from, session);
+}
+
+async function handleConfirmDelete(from, msg, session) {
+  const lower = msg.toLowerCase();
+  const label = ACTIVITY_TYPES.find(a => a.name === session.conflictAct).label;
+
+  if (lower.includes('yes') || lower.includes('y')) {
+    // Delete from array
+    session.selectedActivities = session.selectedActivities.filter(a => a !== session.conflictAct);
+    session.parsedJSON.activities = session.parsedJSON.activities.filter(a => a.activity_type_name !== session.conflictAct);
+    
+    // Add back to end of queue to re-ask
+    session.selectedActivities.push(session.conflictAct);
+    session.currentActivityIndex = session.selectedActivities.length - 1;
+    
+    session.state = 'LOOP_ACTIVITIES';
+    await sessionService.setSession(from, session);
+    await whatsappService.sendMessage(from, `Deleted previous *${label}*. Let's re-enter it.`);
+    await askNextActivity(from, session);
+  } else {
+    // Abort edit, go back to final review
+    session.state = 'FINAL_REVIEW';
+    await sessionService.setSession(from, session);
+    await whatsappService.sendMessage(from, `Are you done? (Yes/No)`);
   }
 }
 
 // ─────────────────────────────────────────────
-// HELPERS
+// DB SUBMISSION
 // ─────────────────────────────────────────────
 
-function getTimeGreeting() {
-  const h = new Date().getUTCHours() + 5.5; // IST offset
-  const hour = Math.floor(h) % 24;
-  if (hour < 12) return 'morning';
-  if (hour < 17) return 'afternoon';
-  return 'evening';
+async function submitToDB(from, session) {
+  const payload = {
+    farm_id: session.farmId,
+    farm_code_snapshot: session.farmCode,
+    farm_name_snapshot: session.farmName,
+    report_date: new Date().toISOString().split('T')[0],
+    deviation_notes: session.parsedJSON.deviation_notes,
+    next_day_plans: session.parsedJSON.next_day_plans,
+    agronomy_report: session.parsedJSON.agronomy_report,
+    activities: session.parsedJSON.activities
+  };
+
+  try {
+    const saved = await supabaseService.saveDTSSubmission(payload);
+    await whatsappService.sendMessage(from, `✅ Daily Task Sheet Submitted successfully!\nReference ID: ${saved.submission_id}\n\nHave a good evening!`);
+    await sessionService.deleteSession(from);
+  } catch (err) {
+    console.error('Save Error:', err);
+    await whatsappService.sendMessage(from, `Failed to save to database. Error: ${err.message}`);
+  }
 }
 
 module.exports = { handleIncomingMessage };
