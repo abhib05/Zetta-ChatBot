@@ -244,42 +244,67 @@ async function askNextMissingField(from, session) {
 
 async function handleMissingFields(from, msg, session) {
   const missing = session.missingFieldsQueue.shift();
-  
-  // Call LLM to extract fields from the answer
-  const parsedAnswers = await openaiService.parseMissingFields(msg, missing, session.missingFieldsQueue);
-  
   const act = session.parsedJSON.activities[missing.activityIndex];
 
-  if (parsedAnswers) {
-    // Process current missing field
-    const mainVal = parsedAnswers[missing.field] !== undefined ? parsedAnswers[missing.field] : msg;
-    if (missing.isDetail) {
-      act.details[missing.field] = mainVal;
-    } else {
-      act[missing.field] = mainVal;
-    }
-    
-    // Process other missing fields answered
-    const remainingQueue = [];
-    for (const q of session.missingFieldsQueue) {
-      if (q.activityIndex === missing.activityIndex && parsedAnswers[q.field] !== undefined && parsedAnswers[q.field] !== null) {
-        // user answered this one too!
-        if (q.isDetail) {
-          act.details[q.field] = parsedAnswers[q.field];
-        } else {
-          act[q.field] = parsedAnswers[q.field];
-        }
+  let mainVal = msg;
+  let extractedUnit = null;
+
+  // If the user was asked for quantity or similar, and provides "10 kgs", split it
+  if (['quantity', 'input_qty'].includes(missing.field)) {
+    const match = msg.trim().match(/^([\d.]+)\s+([a-zA-Z].*)$/);
+    if (match) {
+      let val = parseFloat(match[1]);
+      let rawUnit = match[2].toLowerCase().trim();
+      
+      if (rawUnit === 'kgs' || rawUnit === 'kg') {
+        mainVal = val / 1000;
+        extractedUnit = 'tons';
+      } else if (rawUnit === 'tons' || rawUnit === 'ton') {
+        mainVal = val;
+        extractedUnit = 'tons';
       } else {
-        remainingQueue.push(q);
+        mainVal = match[1];
+        extractedUnit = match[2];
       }
     }
-    session.missingFieldsQueue = remainingQueue;
+  }
+
+  // If they were asked explicitly for 'unit' (because they only gave a number earlier)
+  if (missing.field === 'unit') {
+    let rawUnit = msg.trim().toLowerCase();
+    if (rawUnit === 'kgs' || rawUnit === 'kg') {
+      mainVal = 'tons';
+      // Find the previously saved quantity and convert it
+      if (act.details && act.details.quantity) {
+        act.details.quantity = parseFloat(act.details.quantity) / 1000;
+      } else if (act.quantity) {
+        act.quantity = parseFloat(act.quantity) / 1000;
+      }
+    } else if (rawUnit === 'tons' || rawUnit === 'ton') {
+      mainVal = 'tons';
+    }
+  }
+
+  // Inject raw string into JSON
+  if (missing.isDetail) {
+    act.details[missing.field] = mainVal;
   } else {
-    // Fallback if LLM fails
-    if (missing.isDetail) {
-      act.details[missing.field] = msg;
-    } else {
-      act[missing.field] = msg;
+    act[missing.field] = mainVal;
+  }
+
+  // If we extracted a unit from the quantity answer, fill it and remove from queue
+  if (extractedUnit) {
+    const unitIndex = session.missingFieldsQueue.findIndex(
+      q => q.activityIndex === missing.activityIndex && q.field === 'unit'
+    );
+    if (unitIndex !== -1) {
+      const unitQ = session.missingFieldsQueue[unitIndex];
+      if (unitQ.isDetail) {
+        act.details[unitQ.field] = extractedUnit;
+      } else {
+        act[unitQ.field] = extractedUnit;
+      }
+      session.missingFieldsQueue.splice(unitIndex, 1);
     }
   }
 
