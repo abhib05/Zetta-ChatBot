@@ -24,6 +24,7 @@ function getClient() {
     lazyConnect: true,
     connectTimeout: 5000,
     commandTimeout: 3000,
+    enableOfflineQueue: false,
   });
 
   redisClient.on('connect', () => console.log('✅ Redis connected'));
