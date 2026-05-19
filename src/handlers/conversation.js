@@ -247,18 +247,28 @@ async function runAIParsing(from, session) {
   session.missingFieldsQueue = [];
   parsed.activities.forEach((act, idx) => {
     ['plot_name', 'labour_count', 'duration_minutes'].forEach(field => {
-      if (act[field] === null) {
+      if (act[field] === null || act[field] === undefined) {
         session.missingFieldsQueue.push({ activityIndex: idx, actName: act.activity_type_name, field, isDetail: false });
       }
     });
-    // Check specific details
-    if (act.details) {
-      Object.keys(act.details).forEach(key => {
-        if (act.details[key] === null) {
-          session.missingFieldsQueue.push({ activityIndex: idx, actName: act.activity_type_name, field: key, isDetail: true });
-        }
-      });
-    }
+    const EXPECTED_DETAILS = {
+      land_preparation: ['activity_name', 'machine_name'],
+      sowing_transplanting: ['seed_rate_per_acre', 'plants_sown', 'sowing_method', 'machine_time_minutes'],
+      irrigation: ['irrigation_method', 'power_source', 'fuel_used_litres'],
+      weeding: ['weeding_method', 'input_name', 'input_qty'],
+      agri_inputs: ['input_method', 'input_type', 'input_name', 'input_qty'],
+      other_machinery_usage: ['machine_name', 'fuel_used_litres'],
+      harvest: ['harvest_cycle_no', 'harvesting_method', 'quantity', 'unit', 'machine_time_minutes']
+    };
+
+    const expectedKeys = EXPECTED_DETAILS[act.activity_type_name] || [];
+    if (!act.details) act.details = {};
+
+    expectedKeys.forEach(key => {
+      if (act.details[key] === null || act.details[key] === undefined) {
+        session.missingFieldsQueue.push({ activityIndex: idx, actName: act.activity_type_name, field: key, isDetail: true });
+      }
+    });
   });
 
   if (session.missingFieldsQueue.length > 0) {
@@ -503,6 +513,19 @@ async function submitToDB(from, session) {
     if (act.details && act.details.machine_name) {
       const m = session.dbCache.machines.find(x => x.machine_name.toLowerCase() === act.details.machine_name.toLowerCase());
       if (m) act.details.machine_id = m.machine_id;
+    }
+
+    // Copy generic fields to details if they are expected by the database details tables
+    if (act.details) {
+      if (act.labour_count !== undefined && act.labour_count !== null && act.details.labour_count === undefined) {
+        act.details.labour_count = act.labour_count;
+      }
+      if (act.duration_minutes !== undefined && act.duration_minutes !== null && act.details.time_minutes === undefined) {
+        act.details.time_minutes = act.duration_minutes;
+      }
+      if (act.expense_amount !== undefined && act.expense_amount !== null && act.details.expense_amount === undefined) {
+        act.details.expense_amount = act.expense_amount;
+      }
     }
 
     // 4. Defensively enforce numeric fields (LLM sometimes fails to nullify text in integers)
