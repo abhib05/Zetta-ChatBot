@@ -11,7 +11,10 @@ INSERT INTO employees (employee_id, employee_code, employee_name, active) VALUES
   ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'emp 003', 'Priya Desai', TRUE),
   ('e4a4d6ab-743f-4e0c-a968-3c35b8fc6e26', 'emp 004', 'Anita Sharma', TRUE),
   ('e5a4d6ab-743f-4e0c-a968-3c35b8fc6e27', 'emp 005', 'Vikram Singh', TRUE)
-ON CONFLICT DO NOTHING;
+ON CONFLICT (employee_id) DO UPDATE SET 
+  employee_code = EXCLUDED.employee_code,
+  employee_name = EXCLUDED.employee_name,
+  active = EXCLUDED.active;
 
 
 -- 2. Create Crops
