@@ -137,4 +137,45 @@ function extractSaveData(aiResponse) {
   }
 }
 
-module.exports = { parseActivities, normalizeAndValidate, extractSaveData };
+/**
+ * Call to parse a missing field answer, checking if it also answers other missing fields.
+ */
+async function parseMissingFields(msg, currentMissing, queue) {
+  const sameActQueue = queue.filter(q => q.activityIndex === currentMissing.activityIndex);
+  const otherFields = sameActQueue.map(q => q.field);
+  
+  let otherFieldsText = otherFields.length > 0 
+    ? `Other missing fields for this activity are: [${otherFields.join(', ')}]\nThey might have also provided information for these.`
+    : `There are no other missing fields for this activity.`;
+
+  const systemPrompt = `The user was asked to provide the "${currentMissing.field}" for the activity "${currentMissing.actName}".
+Their response is: "${msg}"
+
+${otherFieldsText}
+
+Extract the value for "${currentMissing.field}" and any other fields if they are explicitly present in the response.
+Do not guess values if they are not in the response.
+Return ONLY a valid JSON object wrapped in <SAVE_DATA> tags.
+Format:
+<SAVE_DATA>
+{
+  "${currentMissing.field}": "extracted value",
+  "some_other_field": "extracted value if present, else null"
+}
+</SAVE_DATA>`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt }
+  ];
+
+  const response = await openai.chat.completions.create({
+    model: config.openai.model,
+    messages,
+    max_tokens: 500,
+    temperature: 0.1,
+  });
+
+  return extractSaveData(response.choices[0].message.content.trim());
+}
+
+module.exports = { parseActivities, normalizeAndValidate, extractSaveData, parseMissingFields };

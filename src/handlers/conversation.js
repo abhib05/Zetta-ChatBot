@@ -245,12 +245,42 @@ async function askNextMissingField(from, session) {
 async function handleMissingFields(from, msg, session) {
   const missing = session.missingFieldsQueue.shift();
   
-  // Inject raw string into JSON (NO LLM CALL YET)
+  // Call LLM to extract fields from the answer
+  const parsedAnswers = await openaiService.parseMissingFields(msg, missing, session.missingFieldsQueue);
+  
   const act = session.parsedJSON.activities[missing.activityIndex];
-  if (missing.isDetail) {
-    act.details[missing.field] = msg;
+
+  if (parsedAnswers) {
+    // Process current missing field
+    const mainVal = parsedAnswers[missing.field] !== undefined ? parsedAnswers[missing.field] : msg;
+    if (missing.isDetail) {
+      act.details[missing.field] = mainVal;
+    } else {
+      act[missing.field] = mainVal;
+    }
+    
+    // Process other missing fields answered
+    const remainingQueue = [];
+    for (const q of session.missingFieldsQueue) {
+      if (q.activityIndex === missing.activityIndex && parsedAnswers[q.field] !== undefined && parsedAnswers[q.field] !== null) {
+        // user answered this one too!
+        if (q.isDetail) {
+          act.details[q.field] = parsedAnswers[q.field];
+        } else {
+          act[q.field] = parsedAnswers[q.field];
+        }
+      } else {
+        remainingQueue.push(q);
+      }
+    }
+    session.missingFieldsQueue = remainingQueue;
   } else {
-    act[missing.field] = msg;
+    // Fallback if LLM fails
+    if (missing.isDetail) {
+      act.details[missing.field] = msg;
+    } else {
+      act[missing.field] = msg;
+    }
   }
 
   if (session.missingFieldsQueue.length > 0) {
