@@ -1,165 +1,129 @@
 /**
  * OpenRouter Service (OpenAI-compatible)
- * Powers the natural-language DTS data collection conversation.
- * Uses OpenRouter's free-tier models via the OpenAI SDK (drop-in compatible).
- * Uses structured extraction via <SAVE_DATA> tags to convert chat → DB records.
- *
- * OpenRouter docs: https://openrouter.ai/docs
+ * Handles the 2-step parsing for the rule-based agent.
  */
 
 const OpenAI = require('openai');
 const config = require('../config');
 
-// OpenRouter is fully OpenAI SDK compatible — just swap the baseURL
 const openai = new OpenAI({
   apiKey: config.openai.apiKey,
-  baseURL: 'https://openrouter.ai/api/v1',
   defaultHeaders: {
     'HTTP-Referer': 'https://zettafarms.com',
     'X-Title': 'Zetta Farm Chatbot',
   },
 });
 
-// ─────────────────────────────────────────────
-// SYSTEM PROMPT
-// This shapes how the AI interacts with farmers.
-// ─────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are Zetta Farm Assistant — a friendly, patient WhatsApp chatbot that helps farmers fill their Daily Task Sheet (DTS) through natural conversation.
+/**
+ * Call 1: Parse unstructured text into JSON.
+ * Any missing data should be explicitly set to null.
+ */
+async function parseActivities(transcript, dbCache) {
+  const plotsList = dbCache.plots.map(p => p.plot_code).join(', ');
+  const cropsList = dbCache.allCrops.map(c => c.crop_name).join(', ');
+  const machinesList = dbCache.machines.map(m => m.machine_name).join(', ');
 
-PERSONALITY:
-- Warm, simple, direct
-- One question at a time — never overwhelm
-- Short messages (under 200 characters ideally, WhatsApp-friendly)
-- No markdown, no asterisks, no bullet points in messages — plain text only
-- Accept vague answers and ask smart follow-up questions
+  const systemPrompt = `You are a strict data extraction AI for a Farm Management System.
+The user has provided a transcript of their farm activities. Extract this into a structured JSON array.
 
-YOUR GOAL: Collect all DTS data through conversation, then save it.
+Valid Plots for this farm: [${plotsList}]
+Valid Crops in system: [${cropsList}]
+Valid Machines in system: [${machinesList}]
 
-─── SECTION 1: MACHINERY USAGE (0 or more entries) ───
-For each machinery activity, collect:
-  - plot        : Plot name or number (e.g. A1, North Block)
-  - crop        : What crop is on that plot (e.g. Sugarcane, Cotton)
-  - acres       : How many acres (number)
-  - activityName: What was done (Ploughing, Irrigation, Spraying, Weeding, Levelling, etc.)
-  - machineType : Machine used (Tractor, JCB, Power Tiller, Harvester, etc.)
-  - machineCode : Machine ID/code if known (optional — skip if farmer doesn't know)
-  - timeHours   : Hours worked (number)
-  - timeMinutes : Minutes worked (number, 0-59)
-  - fuelUsed    : Fuel consumed in litres (optional — skip if farmer doesn't know)
+Map the activities to exactly these 7 types:
+1. land_preparation
+2. sowing_transplanting
+3. irrigation
+4. weeding
+5. agri_inputs
+6. other_machinery_usage
+7. harvest
 
-─── SECTION 2: HARVEST (0 or more entries) ───
-For each harvest activity, collect:
-  - plot            : Plot name or number
-  - crop            : Crop harvested
-  - acres           : Acres harvested
-  - harvestCycleNo  : Harvest cycle number (1st, 2nd, 3rd, etc.)
-  - harvestingMethod: Manual or Machine
-  - quantity        : How much harvested (number)
-  - quantityUnit    : Unit (kg, tonnes, bags, quintals, etc.)
-  - labourCount     : Number of workers involved
-  - machine         : Machine used (if any, else "None")
-  - timeHours       : Hours taken
-  - timeMinutes     : Minutes taken
-  - expenseType     : "Lab" (labour), "Mach" (machine), or "Both"
-  - expenseAmount   : Amount in rupees (optional)
+For each activity, fill out the generic fields (plot_name, crop_name, acres, labour_count, duration_minutes, expense_amount, remarks).
+If a field is not mentioned, set it to null. DO NOT GUESS.
 
-─── SECTION 3: ADDITIONAL INFO ───
-  - reasonsForDeviation: Any deviation from original plan? Why? (can be "None")
-  - nextDayPlans       : What is planned for tomorrow?
-  - agronomyReport     : Crop health, pest/disease issues, soil observations? (can be "None")
-  - filledBy           : Name of the person reporting
+Also fill out the "details" object specifically for that activity type based on the schema:
+- land_preparation: activity_name, machine_name, time_minutes
+- sowing_transplanting: seed_rate_per_acre, plants_sown, sowing_method, machine_time_minutes
+- irrigation: irrigation_method, power_source, fuel_used_litres
+- weeding: weeding_method, input_name, input_qty
+- agri_inputs: input_method, input_type, input_name, input_qty
+- other_machinery_usage: machine_name, fuel_used_litres
+- harvest: harvest_cycle_no, harvesting_method, quantity, unit, machine_time_minutes
 
-─── CONVERSATION FLOW ───
-1. Ask: "What work was done on the farm today? Tell me the activities."
-2. Extract machinery usage. After each entry ask "Any other machinery work today?"
-3. Ask: "Was any harvesting done today?"
-4. Extract harvest data if yes.
-5. Ask: "Were there any deviations from today's original plan?"
-6. Ask: "What are the plans for tomorrow?"
-7. Ask: "Any crop health or agronomy observations today?"
-8. Ask: "Who is filling this report? Your name please."
-9. Summarize and confirm: "Here is your DTS summary: [short summary]. Shall I submit this?"
-10. On confirmation OR if farmer says "done/thank you/all done/yes/submit" — output SAVE_DATA.
-
-─── SAVE TRIGGER ───
-When you have enough data AND farmer confirms, output this block EXACTLY:
+Return ONLY valid JSON wrapped in <SAVE_DATA> tags.
+Format:
 <SAVE_DATA>
 {
-  "machineryUsage": [
+  "activities": [
     {
-      "plot": "",
-      "crop": "",
-      "acres": 0,
-      "activityName": "",
-      "machineType": "",
-      "machineCode": "",
-      "timeHours": 0,
-      "timeMinutes": 0,
-      "fuelUsed": null
+      "activity_type_name": "weeding",
+      "plot_name": "Plot A1",
+      "crop_name": "Sugarcane",
+      "acres": 1.5,
+      "labour_count": null,
+      ...
+      "details": { ... }
     }
   ],
-  "harvest": [
-    {
-      "plot": "",
-      "crop": "",
-      "acres": 0,
-      "harvestCycleNo": "",
-      "harvestingMethod": "",
-      "quantity": 0,
-      "quantityUnit": "kg",
-      "labourCount": 0,
-      "machine": "",
-      "timeHours": 0,
-      "timeMinutes": 0,
-      "expenseType": "",
-      "expenseAmount": null
-    }
-  ],
-  "reasonsForDeviation": "",
-  "nextDayPlans": "",
-  "agronomyReport": "",
-  "filledBy": ""
+  "deviation_notes": null,
+  "next_day_plans": null,
+  "agronomy_report": null,
+  "filled_by": null
 }
-</SAVE_DATA>
-Then add a short thank-you message AFTER the closing tag.
-
-IMPORTANT RULES:
-- Never output the <SAVE_DATA> block mid-conversation. Only at the very end after confirmation.
-- Empty arrays [] are fine if no machinery or harvest happened.
-- Always ask for filledBy (reporter name) before saving.
-- If farmer says "done", "thank you", "submit", "all done", "bas ho gaya", "finish" — trigger the save.
-- Keep the JSON valid — no trailing commas, no comments inside the JSON.`;
-
-/**
- * Send conversation history + new message to GPT and get reply.
- * @param {Array}  history     - [{role, content}] — last N turns
- * @param {string} userMessage - Latest farmer message
- * @param {Object} farmCtx     - {farmCode, farmName, date}
- */
-async function processMessage(history, userMessage, farmCtx = {}) {
-  const contextNote = farmCtx.farmName
-    ? `\n\n[SESSION CONTEXT — Farm: ${farmCtx.farmName} (${farmCtx.farmCode}), Report Date: ${farmCtx.date}]`
-    : '';
+</SAVE_DATA>`;
 
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT + contextNote },
-    ...history,
-    { role: 'user', content: userMessage },
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: `TRANSCRIPT:\n${transcript}` }
   ];
 
   const response = await openai.chat.completions.create({
     model: config.openai.model,
     messages,
-    max_tokens: 600,
-    temperature: 0.5, // Lower temp = more consistent structured output
+    max_tokens: 1500,
+    temperature: 0.1,
   });
 
-  return response.choices[0].message.content.trim();
+  return extractSaveData(response.choices[0].message.content.trim());
 }
 
 /**
- * Pull structured JSON out of the <SAVE_DATA> block, if present.
+ * Call 2: Final validation & normalization.
+ * Takes the JSON (which might have raw text strings injected by the rule-based agent for missing fields)
+ * and normalizes all fields to strict Database types (Integers, Numerics).
  */
+async function normalizeAndValidate(filledJson, dbCache) {
+  const systemPrompt = `You are a strict database normalizer.
+The provided JSON contains farm data. Some fields may contain raw strings like "3 hours" instead of integers, or "five" instead of 5, or typos in plot names.
+
+Your task is to:
+1. Normalize all numeric fields (acres, labour_count, duration_minutes, expense_amount, quantities) to strict Integers or Floats.
+2. Normalize all time-related fields to total minutes (e.g., "2 hours" -> 120).
+3. Ensure no numeric fields contain text. If a value cannot be converted, set it to null.
+4. Correct any minor typos in plot_name, crop_name, or machine_name to match the exact string formats provided below.
+
+Valid Plots: ${dbCache.plots.map(p => p.plot_code).join(', ')}
+Valid Crops: ${dbCache.allCrops.map(c => c.crop_name).join(', ')}
+Valid Machines: ${dbCache.machines.map(m => m.machine_name).join(', ')}
+
+Return the perfectly normalized JSON wrapped in <SAVE_DATA> tags.`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: JSON.stringify(filledJson, null, 2) }
+  ];
+
+  const response = await openai.chat.completions.create({
+    model: config.openai.model,
+    messages,
+    max_tokens: 1500,
+    temperature: 0.0,
+  });
+
+  return extractSaveData(response.choices[0].message.content.trim());
+}
+
 function extractSaveData(aiResponse) {
   const match = aiResponse.match(/<SAVE_DATA>([\s\S]*?)<\/SAVE_DATA>/);
   if (!match) return null;
@@ -169,30 +133,8 @@ function extractSaveData(aiResponse) {
     return JSON.parse(cleanStr);
   } catch (e) {
     console.error('⚠️  Failed to parse SAVE_DATA JSON:', e.message);
-    console.error('Raw block:', match[1]);
     return null;
   }
 }
 
-/**
- * Strip the <SAVE_DATA> block from AI response before sending to farmer.
- */
-function cleanResponse(aiResponse) {
-  return aiResponse.replace(/<SAVE_DATA>[\s\S]*?<\/SAVE_DATA>/g, '').trim();
-}
-
-/**
- * Detect exit/done phrases from the farmer.
- */
-function isExitPhrase(message) {
-  const exitWords = [
-    'done', 'thank you', 'thanks', "that's all", 'finished',
-    'complete', 'bye', 'all done', 'thats all', 'submit',
-    'bas', 'bas ho gaya', 'ho gaya', 'finish', 'ok done',
-    'yes submit', 'please save', 'save it',
-  ];
-  const lower = message.toLowerCase().trim();
-  return exitWords.some((w) => lower.includes(w));
-}
-
-module.exports = { processMessage, extractSaveData, cleanResponse, isExitPhrase };
+module.exports = { parseActivities, normalizeAndValidate, extractSaveData };

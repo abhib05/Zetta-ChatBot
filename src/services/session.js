@@ -29,7 +29,6 @@ function getClient() {
   redisClient.on('connect', () => console.log('✅ Redis connected'));
   redisClient.on('error', (err) => {
     console.warn('⚠️  Redis error (falling back to memory):', err.message);
-    // Keep ioredis instance so it tries reconnecting instead of spamming new maps/clients
   });
 
   return redisClient;
@@ -68,27 +67,39 @@ async function deleteSession(phoneNumber) {
 }
 
 /**
- * Create a fresh session for a farmer.
- * State machine: AWAITING_FARM_CODE → COLLECTING_DATA → COMPLETED
+ * Create a fresh session for a farmer implementing the 6-Step workflow.
  */
 async function createSession(phoneNumber) {
   const session = {
     phoneNumber,
     state: 'AWAITING_FARM_CODE',
+    farmId: null,
     farmCode: null,
     farmName: null,
-    conversationId: null,
-    // DTS data buckets — filled progressively via AI extraction
-    collectedData: {
-      machineryUsage: [],   // Array of machinery entries
-      harvest: [],          // Array of harvest entries
-      reasonsForDeviation: null,
-      nextDayPlans: null,
-      agronomyReport: null,
-      filledBy: null,
-    },
-    conversationHistory: [], // OpenAI message objects [{role, content}]
-    turnCount: 0,
+    
+    // Cached DB reference tables for fuzzy matching without DB hits
+    dbCache: { plots: [], allCrops: [], machines: [], employees: [] },
+    
+    // Onboarding tracking
+    onboardingPlots: [],
+    
+    // Activity tracking (Step 3 & 4)
+    selectedActivities: [],
+    currentActivityIndex: 0,
+    
+    // Collected raw unstructured text from user per activity
+    collectedRaw: {}, // e.g. { land_preparation: "Ploughed using tractor for 2 hours..." }
+    
+    // Missing Fields tracking (Rule-based missing queue)
+    parsedJSON: null,       // Output from LLM
+    missingFieldsQueue: [], // Array of missing questions e.g. [{ activity: 'weeding', field: 'labour_count' }]
+    
+    // Final review
+    deviationNotes: null,
+    nextDayPlans: null,
+    agronomyReport: null,
+    filledBy: null,
+
     createdAt: new Date().toISOString(),
   };
 
@@ -106,16 +117,12 @@ async function markMessageProcessed(msgId) {
     const isNew = await client.set(key, '1', 'NX', 'EX', 3600);
     return !!isNew;
   } catch {
-    // Memory fallback
     if (memStore.has(key)) return false;
     memStore.set(key, '1', { ttl: 1000 * 60 * 60 });
     return true;
   }
 }
 
-/**
- * Acquire a lock for a phone number to prevent race conditions.
- */
 async function acquireLock(phoneNumber) {
   const key = `lock:${phoneNumber}`;
   try {
