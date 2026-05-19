@@ -4,11 +4,15 @@
 -- ============================================================
 
 -- 1. Create Employees
+-- 1. Create Employees
 INSERT INTO employees (employee_id, employee_code, employee_name, active) VALUES
   ('e1a4d6ab-743f-4e0c-a968-3c35b8fc6e23', 'emp 001', 'Rajesh Patil', TRUE),
   ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'emp 002', 'Suresh Kumar', TRUE),
-  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'emp 003', 'Priya Desai', TRUE)
+  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'emp 003', 'Priya Desai', TRUE),
+  ('e4a4d6ab-743f-4e0c-a968-3c35b8fc6e26', 'emp 004', 'Anita Sharma', TRUE),
+  ('e5a4d6ab-743f-4e0c-a968-3c35b8fc6e27', 'emp 005', 'Vikram Singh', TRUE)
 ON CONFLICT DO NOTHING;
+
 
 -- 2. Create Crops
 INSERT INTO crops (crop_id, crop_name, active) VALUES
@@ -31,10 +35,30 @@ INSERT INTO farms (farm_id, farm_code, farm_name, total_acres, active) VALUES
 ON CONFLICT (farm_code) DO NOTHING;
 
 -- 5. Map Employees to Farms (Memberships)
+-- 3. Map Employees to Farms (Memberships) – each employee gets all three farms
 INSERT INTO farm_memberships (employee_id, farm_id, role) VALUES
+  -- Employee 1
   ('e1a4d6ab-743f-4e0c-a968-3c35b8fc6e23', 'f1a4d6ab-743f-4e0c-a968-3c35b8fc6e91', 'Manager'),
-  ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'f2a4d6ab-743f-4e0c-a968-3c35b8fc6e92', 'Owner')
+  ('e1a4d6ab-743f-4e0c-a968-3c35b8fc6e23', 'f2a4d6ab-743f-4e0c-a968-3c35b8fc6e92', 'Manager'),
+  ('e1a4d6ab-743f-4e0c-a968-3c35b8fc6e23', 'f3a4d6ab-743f-4e0c-a968-3c35b8fc6e93', 'Manager'),
+  -- Employee 2
+  ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'f1a4d6ab-743f-4e0c-a968-3c35b8fc6e91', 'Owner'),
+  ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'f2a4d6ab-743f-4e0c-a968-3c35b8fc6e92', 'Owner'),
+  ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'f3a4d6ab-743f-4e0c-a968-3c35b8fc6e93', 'Owner'),
+  -- Employee 3
+  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'f1a4d6ab-743f-4e0c-a968-3c35b8fc6e91', 'Supervisor'),
+  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'f2a4d6ab-743f-4e0c-a968-3c35b8fc6e92', 'Supervisor'),
+  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'f3a4d6ab-743f-4e0c-a968-3c35b8fc6e93', 'Supervisor'),
+  -- Employee 4
+  ('e4a4d6ab-743f-4e0c-a968-3c35b8fc6e26', 'f1a4d6ab-743f-4e0c-a968-3c35b8fc6e91', 'Operator'),
+  ('e4a4d6ab-743f-4e0c-a968-3c35b8fc6e26', 'f2a4d6ab-743f-4e0c-a968-3c35b8fc6e92', 'Operator'),
+  ('e4a4d6ab-743f-4e0c-a968-3c35b8fc6e26', 'f3a4d6ab-743f-4e0c-a968-3c35b8fc6e93', 'Operator'),
+  -- Employee 5
+  ('e5a4d6ab-743f-4e0c-a968-3c35b8fc6e27', 'f1a4d6ab-743f-4e0c-a968-3c35b8fc6e91', 'Technician'),
+  ('e5a4d6ab-743f-4e0c-a968-3c35b8fc6e27', 'f2a4d6ab-743f-4e0c-a968-3c35b8fc6e92', 'Technician'),
+  ('e5a4d6ab-743f-4e0c-a968-3c35b8fc6e27', 'f3a4d6ab-743f-4e0c-a968-3c35b8fc6e93', 'Technician')
 ON CONFLICT DO NOTHING;
+
 
 -- 6. Create Initial Farm Plots & Set Current Crop
 INSERT INTO farm_plots (plot_id, farm_id, plot_code, acres, current_crop_id, active) VALUES
