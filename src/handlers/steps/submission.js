@@ -66,7 +66,6 @@ async function submitToDB(from, session) {
         act.details.power_source = ps;
       }
     }
-
     return act;
   });
 
