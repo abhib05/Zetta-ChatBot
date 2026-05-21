@@ -70,7 +70,6 @@ Set MISSING fields to null. DO NOT GUESS. Also output deviation_notes,next_day_p
       { role: 'system', content: systemPrompt },
       { role: 'user', content: transcript }
     ],
-    max_tokens: 800,
     temperature: 0.1,
   }), 'parse');
 
@@ -97,7 +96,6 @@ Machines: ${dbCache.machines.map(m => m.machine_name).join(', ')}`;
       { role: 'system', content: systemPrompt },
       { role: 'user', content: JSON.stringify(filledJson) }  // compact JSON saves input tokens
     ],
-    max_tokens: 600,
     temperature: 0.0,
   }), 'normalize');
 

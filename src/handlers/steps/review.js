@@ -19,16 +19,26 @@ async function handleFinalReview(from, msg, session) {
     );
 
     if (duplicates && duplicates.length > 0) {
-      session.state = 'CONFIRM_OVERWRITE';
-      await sessionService.setSession(from, session);
-      
-      let text = `⚠️ You have already submitted the following activities for this farm today:\n`;
+      let text = `⚠️ The following activities have already been recorded today and cannot be duplicated. They have been removed from this submission:\n`;
       duplicates.forEach(d => {
         text += `- ${d.activity_type_name || d.activity} on Plot ${d.plot_name || 'N/A'}\n`;
       });
-      text += `\nDo you want to OVERWRITE the existing records with this new data? (Reply YES to overwrite, NO to cancel submission)`;
-      
-      return whatsappService.sendMessage(from, text);
+      await whatsappService.sendMessage(from, text);
+
+      // Filter out duplicates
+      session.parsedJSON.activities = session.parsedJSON.activities.filter(a => {
+        const actName = a.activity_type_name || a.activity;
+        return !duplicates.find(d => 
+          (d.activity_type_name || d.activity) === actName && 
+          d.plot_id === a.plot_id
+        );
+      });
+      await sessionService.setSession(from, session);
+
+      if (session.parsedJSON.activities.length === 0) {
+        await sessionService.deleteSession(from);
+        return whatsappService.sendMessage(from, `No remaining unique activities to submit. Session discarded. Send your Employee Code to start a new report.`);
+      }
     }
 
     // SUBMIT
@@ -117,17 +127,6 @@ async function handleConfirmDelete(from, msg, session) {
   }
 }
 
-async function handleConfirmOverwrite(from, msg, session) {
-  const lower = msg.toLowerCase();
-  if (lower.includes('yes') || lower.includes('y')) {
-    // Proceed with overwrite
-    await submitToDB(from, session);
-  } else {
-    // Cancel the entire submission
-    await sessionService.deleteSession(from);
-    await whatsappService.sendMessage(from, `Submission cancelled. Your previous records were kept intact. Please send your Employee Code if you'd like to start over.`);
-  }
-}
 
 async function handlePendingAuthorization(from, msg, session) {
   const lower = msg.toLowerCase();
@@ -160,4 +159,4 @@ async function promptFinalReview(from) {
   await whatsappService.sendMessage(from, `Are you done, or do you have more activities to report? (Reply Yes to submit, No to add more)`);
 }
 
-module.exports = { handleFinalReview, handleMoreActivities, handleConfirmDelete, handleConfirmOverwrite, handlePendingAuthorization, handleNoActivityReason, promptFinalReview };
+module.exports = { handleFinalReview, handleMoreActivities, handleConfirmDelete, handlePendingAuthorization, handleNoActivityReason, promptFinalReview };

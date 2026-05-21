@@ -137,6 +137,9 @@ CREATE INDEX IF NOT EXISTS idx_dts_activity_entries_plot_id
 CREATE INDEX IF NOT EXISTS idx_dts_activity_entries_crop_id
   ON dts_activity_entries(crop_id);
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dts_activity_entry 
+  ON dts_activity_entries(submission_id, activity_type_id, COALESCE(plot_id, '00000000-0000-0000-0000-000000000000'));
+
 -- ============================================================
 -- ACTIVITY-SPECIFIC DETAIL TABLES
 -- Each entry_id should appear once in the relevant detail table
@@ -148,7 +151,8 @@ CREATE TABLE IF NOT EXISTS dts_land_preparation_details (
   activity_name TEXT NOT NULL,
   machine_id UUID REFERENCES machines(machine_id) ON DELETE SET NULL,
   time_minutes INT CHECK (time_minutes >= 0),
-  expense_amount NUMERIC CHECK (expense_amount >= 0)
+  expense_amount NUMERIC CHECK (expense_amount >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS dts_sowing_transplanting_details (
@@ -159,7 +163,8 @@ CREATE TABLE IF NOT EXISTS dts_sowing_transplanting_details (
   sowing_method TEXT NOT NULL,
   labour_count INT CHECK (labour_count >= 0),
   machine_time_minutes INT CHECK (machine_time_minutes >= 0),
-  expense_amount NUMERIC CHECK (expense_amount >= 0)
+  expense_amount NUMERIC CHECK (expense_amount >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS dts_irrigation_details (
@@ -170,7 +175,8 @@ CREATE TABLE IF NOT EXISTS dts_irrigation_details (
   labour_count INT CHECK (labour_count >= 0),
   time_minutes INT CHECK (time_minutes >= 0),
   fuel_used_litres NUMERIC CHECK (fuel_used_litres >= 0),
-  expense_amount NUMERIC CHECK (expense_amount >= 0)
+  expense_amount NUMERIC CHECK (expense_amount >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS dts_weeding_details (
@@ -181,7 +187,8 @@ CREATE TABLE IF NOT EXISTS dts_weeding_details (
   input_name TEXT,
   input_qty NUMERIC CHECK (input_qty >= 0),
   time_minutes INT CHECK (time_minutes >= 0),
-  expense_amount NUMERIC CHECK (expense_amount >= 0)
+  expense_amount NUMERIC CHECK (expense_amount >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS dts_agri_input_details (
@@ -193,7 +200,8 @@ CREATE TABLE IF NOT EXISTS dts_agri_input_details (
   input_qty NUMERIC CHECK (input_qty >= 0),
   labour_count INT CHECK (labour_count >= 0),
   time_minutes INT CHECK (time_minutes >= 0),
-  expense_amount NUMERIC CHECK (expense_amount >= 0)
+  expense_amount NUMERIC CHECK (expense_amount >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS dts_other_machinery_details (
@@ -202,7 +210,8 @@ CREATE TABLE IF NOT EXISTS dts_other_machinery_details (
   machine_id UUID REFERENCES machines(machine_id) ON DELETE SET NULL,
   machine_code_snapshot TEXT,
   time_minutes INT CHECK (time_minutes >= 0),
-  fuel_used_litres NUMERIC CHECK (fuel_used_litres >= 0)
+  fuel_used_litres NUMERIC CHECK (fuel_used_litres >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS dts_harvest_details (
@@ -214,7 +223,8 @@ CREATE TABLE IF NOT EXISTS dts_harvest_details (
   unit TEXT NOT NULL,
   labour_count INT CHECK (labour_count >= 0),
   machine_time_minutes INT CHECK (machine_time_minutes >= 0),
-  expense_amount NUMERIC CHECK (expense_amount >= 0)
+  expense_amount NUMERIC CHECK (expense_amount >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ============================================================
@@ -312,12 +322,6 @@ BEGIN
       SELECT activity_type_id INTO v_activity_type_id 
       FROM activity_types 
       WHERE name = item->>'activity_type_name';
-
-      -- Remove any existing activity entry of the same type for this plot on this submission
-      DELETE FROM dts_activity_entries 
-      WHERE submission_id = v_submission_id 
-        AND activity_type_id = v_activity_type_id 
-        AND plot_id IS NOT DISTINCT FROM NULLIF((item->>'plot_id'), '')::UUID;
 
       -- Insert into generic activity entries
       INSERT INTO dts_activity_entries (

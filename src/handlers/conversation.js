@@ -10,7 +10,7 @@ const { handleEmployeeCode, handleFarmCode } = require('./steps/auth');
 const { handleOnboarding } = require('./steps/onboarding');
 const { promptActivities, handleSelectActivities, handleActivityLoop } = require('./steps/activities');
 const { handleMissingFields, handleConfirmConversion } = require('./steps/parsing');
-const { handleFinalReview, handleMoreActivities, handleConfirmDelete, handleConfirmOverwrite, handlePendingAuthorization, handleNoActivityReason } = require('./steps/review');
+const { handleFinalReview, handleMoreActivities, handleConfirmDelete, handlePendingAuthorization, handleNoActivityReason } = require('./steps/review');
 
 async function handleIncomingMessage(from, body) {
   if (!body || body.trim().length === 0) return;
@@ -67,7 +67,6 @@ async function handleIncomingMessage(from, body) {
       case 'ASK_MORE_ACTIVITIES': return handleMoreActivities(from, msg, session);
       case 'ASK_NO_ACTIVITY_REASON': return handleNoActivityReason(from, msg, session);
       case 'CONFIRM_DELETE': return handleConfirmDelete(from, msg, session);
-      case 'CONFIRM_OVERWRITE': return handleConfirmOverwrite(from, msg, session);
       case 'PENDING_AUTHORIZATION': return handlePendingAuthorization(from, msg, session);
       default:
         await sessionService.deleteSession(from);
