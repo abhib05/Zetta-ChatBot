@@ -194,6 +194,36 @@ async function checkDuplicateSubmission(farmId, date) {
   return data || null;
 }
 
+/**
+ * Check if specific activities already exist for a farm on a specific date.
+ * Returns an array of duplicate activities found.
+ */
+async function checkDuplicateActivities(farmId, date, activitiesToCheck) {
+  const submission = await checkDuplicateSubmission(farmId, date);
+  if (!submission) return [];
+
+  const { data } = await supabase
+    .from('dts_activity_entries')
+    .select('plot_id, activity_types(name)')
+    .eq('submission_id', submission.submission_id);
+
+  if (!data || data.length === 0) return [];
+
+  const duplicates = [];
+  for (const act of activitiesToCheck) {
+    const actName = act.activity_type_name || act.activity; // Might be act.activity depending on pipeline stage
+    const existing = data.find(d => 
+      d.activity_types && d.activity_types.name === actName && 
+      d.plot_id === act.plot_id
+    );
+    if (existing) {
+      duplicates.push(act);
+    }
+  }
+
+  return duplicates;
+}
+
 module.exports = { 
   validateEmployeeCode,
   validateEmployeeFarmAccess,
@@ -201,5 +231,6 @@ module.exports = {
   getFarmDetails, 
   saveFarmOnboarding, 
   saveDTSSubmission, 
-  checkDuplicateSubmission 
+  checkDuplicateSubmission,
+  checkDuplicateActivities
 };

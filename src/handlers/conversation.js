@@ -10,7 +10,7 @@ const { handleEmployeeCode, handleFarmCode } = require('./steps/auth');
 const { handleOnboarding } = require('./steps/onboarding');
 const { promptActivities, handleSelectActivities, handleActivityLoop } = require('./steps/activities');
 const { handleMissingFields, handleConfirmConversion } = require('./steps/parsing');
-const { handleFinalReview, handleMoreActivities, handleConfirmDelete, handleNoActivityReason } = require('./steps/review');
+const { handleFinalReview, handleMoreActivities, handleConfirmDelete, handlePendingAuthorization, handleNoActivityReason } = require('./steps/review');
 
 async function handleIncomingMessage(from, body) {
   if (!body || body.trim().length === 0) return;
@@ -29,6 +29,24 @@ async function handleIncomingMessage(from, body) {
   const lowerMsg = msg.toLowerCase();
   const RESTART_TRIGGERS = ['restart', 'reset', 'start over', 'start again', 'wrong info', 'cancel'];
   const wantsRestart = RESTART_TRIGGERS.some(t => lowerMsg === t || lowerMsg.startsWith(t + ' '));
+
+  // Timeout Check (5 minutes)
+  if (session.lastActivity) {
+    const timeSinceLastActivity = Date.now() - new Date(session.lastActivity).getTime();
+    const FIVE_MINUTES = 5 * 60 * 1000;
+
+    if (
+      timeSinceLastActivity > FIVE_MINUTES && 
+      session.state !== 'AWAITING_EMPLOYEE_CODE' &&
+      session.state !== 'PENDING_AUTHORIZATION' &&
+      !wantsRestart
+    ) {
+      session.state = 'PENDING_AUTHORIZATION';
+      await sessionService.setSession(from, session);
+      await whatsappService.sendMessage(from, "Your previous session timed out due to 5 minutes of inactivity. Would you like to save and submit the activities you entered so far? (Reply YES to save, or NO to discard)");
+      return;
+    }
+  }
 
   if (session.state !== 'AWAITING_EMPLOYEE_CODE' && wantsRestart) {
     await sessionService.deleteSession(from);
@@ -49,6 +67,7 @@ async function handleIncomingMessage(from, body) {
       case 'ASK_MORE_ACTIVITIES': return handleMoreActivities(from, msg, session);
       case 'ASK_NO_ACTIVITY_REASON': return handleNoActivityReason(from, msg, session);
       case 'CONFIRM_DELETE': return handleConfirmDelete(from, msg, session);
+      case 'PENDING_AUTHORIZATION': return handlePendingAuthorization(from, msg, session);
       default:
         await sessionService.deleteSession(from);
         await whatsappService.sendMessage(from, "Session reset. Please send your Employee Code.");

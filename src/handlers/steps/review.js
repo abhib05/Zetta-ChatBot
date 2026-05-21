@@ -5,9 +5,42 @@ const { submitToDB } = require('./submission');
 
 function getActivities() { return require('./activities'); }
 
+const supabaseService = require('../../services/supabase');
+
 async function handleFinalReview(from, msg, session) {
   const lower = msg.toLowerCase();
   if (lower.includes('yes') || lower.includes('y') || lower.includes('done')) {
+    // Check for duplicates in DB before submitting
+    const today = new Date().toISOString().split('T')[0];
+    const duplicates = await supabaseService.checkDuplicateActivities(
+      session.farmId, 
+      today, 
+      session.parsedJSON?.activities || []
+    );
+
+    if (duplicates && duplicates.length > 0) {
+      let text = `⚠️ The following activities have already been recorded today and cannot be duplicated. They have been removed from this submission:\n`;
+      duplicates.forEach(d => {
+        text += `- ${d.activity_type_name || d.activity} on Plot ${d.plot_name || 'N/A'}\n`;
+      });
+      await whatsappService.sendMessage(from, text);
+
+      // Filter out duplicates
+      session.parsedJSON.activities = session.parsedJSON.activities.filter(a => {
+        const actName = a.activity_type_name || a.activity;
+        return !duplicates.find(d => 
+          (d.activity_type_name || d.activity) === actName && 
+          d.plot_id === a.plot_id
+        );
+      });
+      await sessionService.setSession(from, session);
+
+      if (session.parsedJSON.activities.length === 0) {
+        await sessionService.deleteSession(from);
+        return whatsappService.sendMessage(from, `No remaining unique activities to submit. Session discarded. Send your Employee Code to start a new report.`);
+      }
+    }
+
     // SUBMIT
     await submitToDB(from, session);
   } else {
@@ -94,6 +127,24 @@ async function handleConfirmDelete(from, msg, session) {
   }
 }
 
+
+async function handlePendingAuthorization(from, msg, session) {
+  const lower = msg.toLowerCase();
+  if (lower.includes('yes') || lower.includes('y')) {
+    // Attempt to submit whatever is collected so far
+    if (session.parsedJSON && session.parsedJSON.activities && session.parsedJSON.activities.length > 0) {
+      await submitToDB(from, session);
+    } else {
+      await sessionService.deleteSession(from);
+      await whatsappService.sendMessage(from, `No activities were recorded to save. Session discarded. Please send your Employee Code to start a new report.`);
+    }
+  } else {
+    // Discard
+    await sessionService.deleteSession(from);
+    await whatsappService.sendMessage(from, `Session discarded. Please send your Employee Code to start a new report.`);
+  }
+}
+
 async function handleNoActivityReason(from, msg, session) {
   session.parsedJSON = {
     activities: [],
@@ -108,4 +159,4 @@ async function promptFinalReview(from) {
   await whatsappService.sendMessage(from, `Are you done, or do you have more activities to report? (Reply Yes to submit, No to add more)`);
 }
 
-module.exports = { handleFinalReview, handleMoreActivities, handleConfirmDelete, handleNoActivityReason, promptFinalReview };
+module.exports = { handleFinalReview, handleMoreActivities, handleConfirmDelete, handlePendingAuthorization, handleNoActivityReason, promptFinalReview };

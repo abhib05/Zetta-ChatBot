@@ -49,11 +49,12 @@ async function getSession(phoneNumber) {
 async function setSession(phoneNumber, sessionData) {
   const key = `${SESSION_PREFIX}${phoneNumber}`;
   const payload = JSON.stringify({ ...sessionData, lastActivity: new Date().toISOString() });
+  const TTL_SECONDS = 6 * 60 * 60; // 6 hours
   try {
     const client = getClient();
-    await client.setex(key, config.redis.sessionTTL, payload);
+    await client.setex(key, TTL_SECONDS, payload);
   } catch {
-    memStore.set(key, JSON.parse(payload));
+    memStore.set(key, JSON.parse(payload), { ttl: TTL_SECONDS * 1000 });
   }
 }
 

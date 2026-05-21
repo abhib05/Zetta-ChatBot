@@ -82,15 +82,6 @@ async function submitToDB(from, session) {
   };
 
   try {
-    // Guard: prevent duplicate DTS submissions for the same farm+day
-    const today = new Date().toISOString().split('T')[0];
-    const existing = await supabaseService.checkDuplicateSubmission(session.farmId, today);
-    if (existing) {
-      await whatsappService.sendMessage(from, `⚠️ A DTS for *${session.farmCode}* on *${today}* was already submitted (Ref: ${existing.submission_id}). Resetting session.`);
-      await sessionService.deleteSession(from);
-      return;
-    }
-
     const saved = await supabaseService.saveDTSSubmission(payload);
     await whatsappService.sendMessage(from, `✅ Daily Task Sheet Submitted successfully!\nReference ID: ${saved.submission_id}\n\nHave a good evening!`);
     await sessionService.deleteSession(from);
