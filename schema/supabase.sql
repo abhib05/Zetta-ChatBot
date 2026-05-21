@@ -313,6 +313,12 @@ BEGIN
       FROM activity_types 
       WHERE name = item->>'activity_type_name';
 
+      -- Remove any existing activity entry of the same type for this plot on this submission
+      DELETE FROM dts_activity_entries 
+      WHERE submission_id = v_submission_id 
+        AND activity_type_id = v_activity_type_id 
+        AND plot_id IS NOT DISTINCT FROM NULLIF((item->>'plot_id'), '')::UUID;
+
       -- Insert into generic activity entries
       INSERT INTO dts_activity_entries (
         submission_id, 
