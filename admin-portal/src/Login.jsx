@@ -50,7 +50,7 @@ export default function Login() {
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '1rem' }}>
       <div className="glass-panel" style={{ width: '100%', maxWidth: '400px' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '48px', height: '48px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.2)', color: 'var(--primary)', marginBottom: '1rem' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '48px', height: '48px', borderRadius: '50%', background: 'rgba(59, 130, 246, 0.2)', color: 'var(--primary)', marginBottom: '1rem' }}>
             <Lock size={24} />
           </div>
           <h2>Admin Portal</h2>

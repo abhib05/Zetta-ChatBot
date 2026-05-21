@@ -140,7 +140,7 @@ export default function Employees() {
                     onClick={() => selectEmployee(emp)}
                     style={{
                       cursor: 'pointer',
-                      background: selectedEmployee?.employee_id === emp.employee_id ? 'rgba(16, 185, 129, 0.1)' : 'transparent'
+                      background: selectedEmployee?.employee_id === emp.employee_id ? 'rgba(59, 130, 246, 0.1)' : 'transparent'
                     }}
                   >
                     <td style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}>{emp.employee_code}</td>
