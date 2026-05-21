@@ -27,7 +27,7 @@ async function validateEmployeeCode(employeeCode) {
   const { data, error } = await supabase
     .from('employees')
     .select('employee_id, employee_code, employee_name')
-    .eq('employee_code', employeeCode.trim().toLowerCase())
+    .ilike('employee_code', employeeCode.trim())
     .eq('active', true)
     .single();
 
@@ -43,7 +43,7 @@ async function validateEmployeeFarmAccess(employeeId, farmCode) {
   const { data: farm, error: farmError } = await supabase
     .from('farms')
     .select('farm_id, farm_code, farm_name, total_acres')
-    .eq('farm_code', farmCode.trim().toUpperCase())
+    .ilike('farm_code', farmCode.trim())
     .eq('active', true)
     .single();
 
@@ -70,7 +70,7 @@ async function validateFarmCode(farmCode) {
   const { data, error } = await supabase
     .from('farms')
     .select('farm_id, farm_code, farm_name, total_acres')
-    .eq('farm_code', farmCode.trim().toUpperCase())
+    .ilike('farm_code', farmCode.trim())
     .eq('active', true)
     .single();
 

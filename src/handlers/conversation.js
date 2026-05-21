@@ -32,6 +32,16 @@ async function handleIncomingMessage(from, body) {
     return;
   }
 
+  const lowerMsg = msg.toLowerCase();
+  const RESTART_TRIGGERS = ['restart', 'reset', 'start over', 'start again', 'wrong info', 'cancel'];
+  const wantsRestart = RESTART_TRIGGERS.some(t => lowerMsg === t || lowerMsg.startsWith(t + ' '));
+
+  if (session.state !== 'AWAITING_EMPLOYEE_CODE' && wantsRestart) {
+    await sessionService.deleteSession(from);
+    await whatsappService.sendMessage(from, `Session cleared. All entered data has been discarded.\n\nPlease send your Employee Code to begin again.`);
+    return;
+  }
+
   try {
     switch (session.state) {
       case 'AWAITING_EMPLOYEE_CODE':
@@ -51,6 +61,9 @@ async function handleIncomingMessage(from, body) {
         break;
       case 'MISSING_FIELDS':
         await handleMissingFields(from, msg, session);
+        break;
+      case 'CONFIRM_CONVERSION':
+        await handleConfirmConversion(from, msg, session);
         break;
       case 'FINAL_REVIEW':
         await handleFinalReview(from, msg, session);
@@ -228,38 +241,54 @@ async function handleActivityLoop(from, msg, session) {
 async function runAIParsing(from, session) {
   await whatsappService.sendMessage(from, `Analyzing your report...`);
   
-  // Build transcript
-  let transcript = '';
-  for (const act of session.selectedActivities) {
-    transcript += `Activity [${act}]: ${session.collectedRaw[act]}\n`;
+  // Find which activities haven't been parsed yet
+  const unparsedActivities = session.selectedActivities.filter(actName => 
+    !session.parsedJSON || !session.parsedJSON.activities || !session.parsedJSON.activities.find(a => a.activity_type_name === actName)
+  );
+
+  if (unparsedActivities.length > 0) {
+    // Build transcript
+    let transcript = '';
+    for (const act of unparsedActivities) {
+      transcript += `Activity [${act}]: ${session.collectedRaw[act]}\n`;
+    }
+
+    // Call 1: Parse unstructured -> JSON
+    const parsed = await openaiService.parseActivities(transcript, session.dbCache);
+    
+    if (!parsed || !parsed.activities) {
+      return whatsappService.sendMessage(from, `Failed to analyze text. Please try again.`);
+    }
+
+    if (!session.parsedJSON) {
+      session.parsedJSON = parsed;
+    } else {
+      if (!session.parsedJSON.activities) session.parsedJSON.activities = [];
+      session.parsedJSON.activities.push(...parsed.activities);
+    }
   }
 
-  // Call 1: Parse unstructured -> JSON
-  const parsed = await openaiService.parseActivities(transcript, session.dbCache);
-  
-  if (!parsed || !parsed.activities) {
-    return whatsappService.sendMessage(from, `Failed to analyze text. Please try again.`);
-  }
+  // Build missing fields queue.
+  // NOTE: session.parsedJSON is guaranteed non-null here — the early return on L249
+  // handles the only failure case (LLM returned null), and the if-block above always
+  // populates session.parsedJSON before we reach this point.
+  const EXPECTED_DETAILS = {
+    land_preparation:      ['activity_name', 'machine_name'],
+    sowing_transplanting:  ['seed_rate_per_acre', 'plants_sown', 'sowing_method', 'machine_time_minutes'],
+    irrigation:            ['irrigation_method', 'power_source', 'fuel_used_litres'],
+    weeding:               ['weeding_method', 'input_name', 'input_qty'],
+    agri_inputs:           ['input_method', 'input_type', 'input_name', 'input_qty'],
+    other_machinery_usage: ['machine_name', 'fuel_used_litres'],
+    harvest:               ['harvest_cycle_no', 'harvesting_method', 'quantity', 'unit', 'machine_time_minutes'],
+  };
 
-  session.parsedJSON = parsed;
-
-  // Build missing fields queue
   session.missingFieldsQueue = [];
-  parsed.activities.forEach((act, idx) => {
+  session.parsedJSON.activities.forEach((act, idx) => {
     ['plot_name', 'labour_count', 'duration_minutes'].forEach(field => {
       if (act[field] === null || act[field] === undefined) {
         session.missingFieldsQueue.push({ activityIndex: idx, actName: act.activity_type_name, field, isDetail: false });
       }
     });
-    const EXPECTED_DETAILS = {
-      land_preparation: ['activity_name', 'machine_name'],
-      sowing_transplanting: ['seed_rate_per_acre', 'plants_sown', 'sowing_method', 'machine_time_minutes'],
-      irrigation: ['irrigation_method', 'power_source', 'fuel_used_litres'],
-      weeding: ['weeding_method', 'input_name', 'input_qty'],
-      agri_inputs: ['input_method', 'input_type', 'input_name', 'input_qty'],
-      other_machinery_usage: ['machine_name', 'fuel_used_litres'],
-      harvest: ['harvest_cycle_no', 'harvesting_method', 'quantity', 'unit', 'machine_time_minutes']
-    };
 
     const expectedKeys = EXPECTED_DETAILS[act.activity_type_name] || [];
     if (!act.details) act.details = {};
@@ -286,32 +315,60 @@ async function askNextMissingField(from, session) {
   const label = ACTIVITY_TYPES.find(a => a.name === missing.actName).label;
   const friendlyField = missing.field.replace(/_/g, ' ');
 
-  await whatsappService.sendMessage(from, `For *${label}*, what was the ${friendlyField}?`);
+  let prompt = `For *${label}*, what was the ${friendlyField}?`;
+  
+  if (missing.field === 'quantity') {
+    prompt = `For *${label}*, what was the ${friendlyField}? (Please provide the value in tonnes)`;
+  } else if (missing.field === 'input_qty') {
+    prompt = `For *${label}*, what was the ${friendlyField}? (Please provide the value in kgs)`;
+  }
+
+  await whatsappService.sendMessage(from, prompt);
 }
 
 async function handleMissingFields(from, msg, session) {
-  const missing = session.missingFieldsQueue.shift();
+  const missing = session.missingFieldsQueue[0];
   const act = session.parsedJSON.activities[missing.activityIndex];
 
   let mainVal = msg;
   let extractedUnit = null;
+  let needsConfirm = false;
 
   // If the user was asked for quantity or similar, and provides "10 kgs", split it
   if (['quantity', 'input_qty'].includes(missing.field)) {
-    const match = msg.trim().match(/^([\d.]+)\s+([a-zA-Z].*)$/);
+    const match = msg.trim().match(/^([\d.]+)\s*([a-zA-Z].*)*$/);
     if (match) {
       let val = parseFloat(match[1]);
-      let rawUnit = match[2].toLowerCase().trim();
-      
-      if (rawUnit === 'kgs' || rawUnit === 'kg') {
-        mainVal = val / 1000;
-        extractedUnit = 'tons';
-      } else if (rawUnit === 'tons' || rawUnit === 'ton') {
-        mainVal = val;
-        extractedUnit = 'tons';
+      let rawUnit = match[2] ? match[2].toLowerCase().trim() : '';
+      let targetUnit = missing.field === 'quantity' ? 'tonnes' : 'kgs';
+      let convertedVal = val;
+
+      if (missing.field === 'quantity') {
+        if (rawUnit === 'kgs' || rawUnit === 'kg') {
+          convertedVal = val / 1000;
+          needsConfirm = true;
+        } else {
+          extractedUnit = 'tons';
+        }
+      } else if (missing.field === 'input_qty') {
+        if (rawUnit === 'tons' || rawUnit === 'ton' || rawUnit === 'tonnes') {
+          convertedVal = val * 1000;
+          needsConfirm = true;
+        }
+      }
+
+      if (needsConfirm) {
+        session.state = 'CONFIRM_CONVERSION';
+        session.pendingConversion = {
+           val: convertedVal,
+           originalMsg: msg,
+           targetUnit: targetUnit,
+           extractedUnit: missing.field === 'quantity' ? 'tons' : null
+        };
+        await sessionService.setSession(from, session);
+        return whatsappService.sendMessage(from, `You entered ${msg}. I will save this as ${convertedVal} ${targetUnit}. Is this correct? (Yes/No)`);
       } else {
-        mainVal = match[1];
-        extractedUnit = match[2];
+        mainVal = val;
       }
     }
   }
@@ -320,14 +377,20 @@ async function handleMissingFields(from, msg, session) {
   if (missing.field === 'unit') {
     let rawUnit = msg.trim().toLowerCase();
     if (rawUnit === 'kgs' || rawUnit === 'kg') {
-      mainVal = 'tons';
-      // Find the previously saved quantity and convert it
-      if (act.details && act.details.quantity) {
-        act.details.quantity = parseFloat(act.details.quantity) / 1000;
-      } else if (act.quantity) {
-        act.quantity = parseFloat(act.quantity) / 1000;
-      }
-    } else if (rawUnit === 'tons' || rawUnit === 'ton') {
+      let currentQ = act.details && act.details.quantity ? act.details.quantity : act.quantity;
+      let newQ = parseFloat(currentQ) / 1000;
+      
+      session.state = 'CONFIRM_CONVERSION';
+      session.pendingConversion = {
+         val: 'tons',
+         originalMsg: msg,
+         targetUnit: 'tons',
+         isUnitField: true,
+         newQuantity: newQ
+      };
+      await sessionService.setSession(from, session);
+      return whatsappService.sendMessage(from, `You entered ${msg}. I will convert the previously entered quantity (${currentQ}) to ${newQ} tonnes. Is this correct? (Yes/No)`);
+    } else {
       mainVal = 'tons';
     }
   }
@@ -340,20 +403,23 @@ async function handleMissingFields(from, msg, session) {
   }
 
   // If we extracted a unit from the quantity answer, fill it and remove from queue
-  if (extractedUnit) {
+  if (extractedUnit || (missing.field === 'quantity' && !needsConfirm)) {
+    let u = extractedUnit || 'tons';
     const unitIndex = session.missingFieldsQueue.findIndex(
       q => q.activityIndex === missing.activityIndex && q.field === 'unit'
     );
     if (unitIndex !== -1) {
       const unitQ = session.missingFieldsQueue[unitIndex];
       if (unitQ.isDetail) {
-        act.details[unitQ.field] = extractedUnit;
+        act.details[unitQ.field] = u;
       } else {
-        act[unitQ.field] = extractedUnit;
+        act[unitQ.field] = u;
       }
       session.missingFieldsQueue.splice(unitIndex, 1);
     }
   }
+
+  session.missingFieldsQueue.shift();
 
   if (session.missingFieldsQueue.length > 0) {
     await sessionService.setSession(from, session);
@@ -361,6 +427,64 @@ async function handleMissingFields(from, msg, session) {
   } else {
     // All filled! Call LLM 2
     await runAIValidation(from, session);
+  }
+}
+
+async function handleConfirmConversion(from, msg, session) {
+  const lower = msg.toLowerCase();
+  const missing = session.missingFieldsQueue[0];
+  const act = session.parsedJSON.activities[missing.activityIndex];
+
+  if (lower.includes('yes') || lower.includes('y')) {
+    const { val, extractedUnit, isUnitField, newQuantity } = session.pendingConversion;
+    
+    if (isUnitField) {
+      if (missing.isDetail) {
+        act.details[missing.field] = val; // 'tons'
+        if (act.details.quantity) act.details.quantity = newQuantity;
+      } else {
+        act[missing.field] = val;
+        if (act.quantity) act.quantity = newQuantity;
+      }
+    } else {
+      if (missing.isDetail) {
+        act.details[missing.field] = val;
+      } else {
+        act[missing.field] = val;
+      }
+
+      if (extractedUnit) {
+        const unitIndex = session.missingFieldsQueue.findIndex(
+          q => q.activityIndex === missing.activityIndex && q.field === 'unit'
+        );
+        if (unitIndex !== -1) {
+          const unitQ = session.missingFieldsQueue[unitIndex];
+          if (unitQ.isDetail) {
+            act.details[unitQ.field] = extractedUnit;
+          } else {
+            act[unitQ.field] = extractedUnit;
+          }
+          session.missingFieldsQueue.splice(unitIndex, 1);
+        }
+      }
+    }
+
+    session.missingFieldsQueue.shift();
+    session.pendingConversion = null;
+    
+    if (session.missingFieldsQueue.length > 0) {
+      session.state = 'MISSING_FIELDS';
+      await sessionService.setSession(from, session);
+      await askNextMissingField(from, session);
+    } else {
+      await runAIValidation(from, session);
+    }
+  } else {
+    // If no, ask them to re-enter the value
+    session.pendingConversion = null;
+    session.state = 'MISSING_FIELDS';
+    await sessionService.setSession(from, session);
+    await askNextMissingField(from, session);
   }
 }
 
@@ -409,8 +533,9 @@ async function handleFinalReview(from, msg, session) {
 async function handleMoreActivities(from, msg, session) {
   const lower = msg.toLowerCase();
   
-  // If they change their mind and type "Done" or "No more"
-  if (lower.includes('done') || lower.includes('no') || lower.includes('none') || lower.includes('cancel')) {
+  // Safely check if they are done adding activities. 
+  // Removed 'no' and 'cancel' to prevent accidental submission of incomplete data.
+  if (lower === 'done' || lower === 'no more' || lower === 'none' || lower === 'submit') {
     return submitToDB(from, session);
   }
 
@@ -512,7 +637,10 @@ async function submitToDB(from, session) {
     // 3. Map Machine — guard `act.details` existence to prevent TypeError when LLM omits the details object
     if (act.details && act.details.machine_name) {
       const m = session.dbCache.machines.find(x => x.machine_name.toLowerCase() === act.details.machine_name.toLowerCase());
-      if (m) act.details.machine_id = m.machine_id;
+      if (m) {
+        act.details.machine_id = m.machine_id;
+        act.details.machine_code_snapshot = m.machine_code;
+      }
     }
 
     // Copy generic fields to details if they are expected by the database details tables
