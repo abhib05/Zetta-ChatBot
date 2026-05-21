@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, ChevronDown, ChevronRight, Lock, Edit2, Trash2 } from 'lucide-react';
+import { usePendingChanges } from './hooks/usePendingChanges';
 
 const API = 'http://localhost:3000/admin';
 const headers = () => ({
@@ -18,14 +19,12 @@ export default function Farms() {
   const [editFarm, setEditFarm] = useState(null);
   const [error, setError] = useState('');
 
-  // New farm form
   const [newFarm, setNewFarm] = useState({ farm_code: '', farm_name: '', total_acres: '' });
-  // New plot form
   const [newPlot, setNewPlot] = useState({ plot_code: '', acres: '' });
-  // New crop form
   const [newCrop, setNewCrop] = useState({ crop_name: '' });
-  // Edit farm form
   const [editForm, setEditForm] = useState({ farm_name: '', total_acres: '' });
+
+  const { addChange } = usePendingChanges();
 
   const fetchFarms = async () => {
     const res = await fetch(`${API}/farms`, { headers: headers() });
@@ -56,70 +55,70 @@ export default function Farms() {
     }
   };
 
-  const handleCreateFarm = async (e) => {
+  const handleCreateFarm = (e) => {
     e.preventDefault();
-    setError('');
-    const res = await fetch(`${API}/farms`, {
-      method: 'POST', headers: headers(),
-      body: JSON.stringify({ ...newFarm, total_acres: parseFloat(newFarm.total_acres) || null })
-    });
-    if (res.ok) {
-      setNewFarm({ farm_code: '', farm_name: '', total_acres: '' });
-      setShowNewFarm(false);
-      fetchFarms();
-    } else {
-      const data = await res.json();
-      setError(data.error);
-    }
+    const payload = { ...newFarm, total_acres: parseFloat(newFarm.total_acres) || null };
+    
+    // Optimistic UI
+    const tempId = 'temp-farm-' + Date.now();
+    setFarms(prev => [{ ...payload, farm_id: tempId }, ...prev]);
+    
+    // Queue change
+    addChange({ type: 'CREATE_FARM', payload });
+    
+    setNewFarm({ farm_code: '', farm_name: '', total_acres: '' });
+    setShowNewFarm(false);
   };
 
-  const handleUpdateFarm = async (farmId) => {
-    setError('');
-    const res = await fetch(`${API}/farms/${farmId}`, {
-      method: 'PUT', headers: headers(),
-      body: JSON.stringify({ farm_name: editForm.farm_name, total_acres: parseFloat(editForm.total_acres) || null })
-    });
-    if (res.ok) {
-      setEditFarm(null);
-      fetchFarms();
-    } else {
-      const data = await res.json();
-      setError(data.error);
+  const handleUpdateFarm = (farmId) => {
+    const payload = { farm_name: editForm.farm_name, total_acres: parseFloat(editForm.total_acres) || null };
+    
+    // Optimistic UI
+    setFarms(prev => prev.map(f => f.farm_id === farmId ? { ...f, ...payload } : f));
+    
+    // Queue change
+    if (!String(farmId).startsWith('temp-')) {
+       addChange({ type: 'UPDATE_FARM', id: farmId, payload });
     }
+    
+    setEditFarm(null);
   };
 
-  const handleCreatePlot = async (e, farmId) => {
+  const handleCreatePlot = (e, farmId) => {
     e.preventDefault();
-    setError('');
-    const res = await fetch(`${API}/farms/${farmId}/plots`, {
-      method: 'POST', headers: headers(),
-      body: JSON.stringify({ plot_code: newPlot.plot_code, acres: parseFloat(newPlot.acres) || null })
-    });
-    if (res.ok) {
-      setNewPlot({ plot_code: '', acres: '' });
-      setShowNewPlot(null);
-      fetchPlots(farmId);
-    } else {
-      const data = await res.json();
-      setError(data.error);
+    const payload = { plot_code: newPlot.plot_code, acres: parseFloat(newPlot.acres) || null };
+    
+    // Optimistic UI
+    const tempId = 'temp-plot-' + Date.now();
+    const farmObj = farms.find(f => f.farm_id === farmId);
+    
+    setPlots(prev => ({
+      ...prev,
+      [farmId]: [...(prev[farmId] || []), { ...payload, plot_id: tempId, assigned_employee: farmObj?.employee_name }]
+    }));
+
+    // Queue change
+    if (!String(farmId).startsWith('temp-')) {
+       addChange({ type: 'CREATE_PLOT', farmId, payload });
     }
+    
+    setNewPlot({ plot_code: '', acres: '' });
+    setShowNewPlot(null);
   };
 
-  const handleCreateCrop = async (e) => {
+  const handleCreateCrop = (e) => {
     e.preventDefault();
-    setError('');
-    const res = await fetch(`${API}/crops`, {
-      method: 'POST', headers: headers(),
-      body: JSON.stringify({ crop_name: newCrop.crop_name })
-    });
-    if (res.ok) {
-      setNewCrop({ crop_name: '' });
-      setShowNewCrop(false);
-      fetchCrops();
-    } else {
-      const data = await res.json();
-      setError(data.error);
-    }
+    const payload = { crop_name: newCrop.crop_name };
+    
+    // Optimistic UI
+    const tempId = 'temp-crop-' + Date.now();
+    setCrops(prev => [...prev, { ...payload, crop_id: tempId }]);
+    
+    // Queue change
+    addChange({ type: 'CREATE_CROP', payload });
+    
+    setNewCrop({ crop_name: '' });
+    setShowNewCrop(false);
   };
 
   const startEdit = (farm) => {
@@ -130,7 +129,7 @@ export default function Farms() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h1>Farms & Plots</h1>
+        <h1>Farms and Plots</h1>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button className="btn btn-outline" onClick={() => setShowNewCrop(!showNewCrop)}>
             <Plus size={16} /> New Crop
@@ -142,12 +141,11 @@ export default function Farms() {
       </div>
 
       {error && (
-        <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', marginBottom: '1rem', fontSize: '0.875rem' }}>
+        <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', color: 'var(--danger)', marginBottom: '1rem', fontSize: '0.875rem' }}>
           {error}
         </div>
       )}
 
-      {/* New Crop Form */}
       {showNewCrop && (
         <div className="glass-panel fade-in" style={{ marginBottom: '1.5rem' }}>
           <h3>Add New Crop</h3>
@@ -168,7 +166,6 @@ export default function Farms() {
         </div>
       )}
 
-      {/* New Farm Form */}
       {showNewFarm && (
         <div className="glass-panel fade-in" style={{ marginBottom: '1.5rem' }}>
           <h3>Create New Farm</h3>
@@ -192,7 +189,6 @@ export default function Farms() {
         </div>
       )}
 
-      {/* Farms List */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         {farms.map(farm => (
           <div key={farm.farm_id} className="glass-panel fade-in">
@@ -200,9 +196,16 @@ export default function Farms() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 {expanded === farm.farm_id ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
                 <div>
-                  <h3 style={{ margin: 0 }}>{farm.farm_name || 'Unnamed Farm'}</h3>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
-                    {farm.farm_code} • {farm.total_acres ? `${farm.total_acres} acres` : 'N/A'}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <h3 style={{ margin: 0 }}>{farm.farm_name || 'Unnamed Farm'}</h3>
+                    {farm.employee_name ? (
+                       <span className="badge badge-info">Assigned: {farm.employee_name}</span>
+                    ) : (
+                       <span className="badge badge-neutral">Unassigned</span>
+                    )}
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0, marginTop: '0.25rem' }}>
+                    {farm.farm_code} {farm.total_acres ? `| ${farm.total_acres} acres` : ''}
                   </p>
                 </div>
               </div>
@@ -222,7 +225,6 @@ export default function Farms() {
               </div>
             </div>
 
-            {/* Plots sub-table */}
             {expanded === farm.farm_id && (
               <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -233,7 +235,7 @@ export default function Farms() {
                 </div>
 
                 {showNewPlot === farm.farm_id && (
-                  <form onSubmit={(e) => handleCreatePlot(e, farm.farm_id)} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', marginBottom: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
+                  <form onSubmit={(e) => handleCreatePlot(e, farm.farm_id)} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', marginBottom: '1rem', padding: '1rem', background: 'var(--panel-inner-bg)', borderRadius: '8px' }}>
                     <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
                       <label>Plot Code</label>
                       <input value={newPlot.plot_code} onChange={e => setNewPlot({ ...newPlot, plot_code: e.target.value })} placeholder="e.g. A1" required />
@@ -255,14 +257,15 @@ export default function Farms() {
                           <th>Acres</th>
                           <th>Current Crop</th>
                           <th>Status</th>
+                          <th>Assigned To</th>
                         </tr>
                       </thead>
                       <tbody>
                         {plots[farm.farm_id].map(plot => (
                           <tr key={plot.plot_id}>
                             <td>{plot.plot_code}</td>
-                            <td>{plot.acres || '—'}</td>
-                            <td>{plot.crops?.crop_name || '—'}</td>
+                            <td>{plot.acres || '-'}</td>
+                            <td>{plot.crops?.crop_name || '-'}</td>
                             <td>
                               {plot.current_crop_id ? (
                                 <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -271,6 +274,9 @@ export default function Farms() {
                               ) : (
                                 <span className="badge badge-success">Available</span>
                               )}
+                            </td>
+                            <td>
+                               {plot.assigned_employee ? plot.assigned_employee : <span style={{ color: 'var(--text-secondary)' }}>- Unassigned</span>}
                             </td>
                           </tr>
                         ))}

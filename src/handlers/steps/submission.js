@@ -56,6 +56,17 @@ async function submitToDB(from, session) {
       if (act.details && act.details[f] !== undefined) act.details[f] = parseFloat(act.details[f]) || null;
     });
 
+    // 5. Defensively enforce ENUM fields
+    if (act.details && act.details.power_source) {
+      const validPowerSources = ['solar', 'electricity', 'generator'];
+      const ps = act.details.power_source.toLowerCase();
+      if (!validPowerSources.includes(ps)) {
+        act.details.power_source = null;
+      } else {
+        act.details.power_source = ps;
+      }
+    }
+
     return act;
   });
 

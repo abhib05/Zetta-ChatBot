@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Check, X, AlertCircle } from 'lucide-react';
+import { usePendingChanges } from './hooks/usePendingChanges';
 
 export default function Dashboard() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  
+  const { addChange } = usePendingChanges();
 
   const fetchRequests = async () => {
     try {
@@ -25,21 +28,12 @@ export default function Dashboard() {
     fetchRequests();
   }, []);
 
-  const handleAction = async (id, action) => {
-    try {
-      const res = await fetch(`http://localhost:3000/admin/harvest-requests/${id}/${action}`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('adminToken')}` }
-      });
-      if (res.ok) {
-        fetchRequests(); // refresh
-      } else {
-        const data = await res.json();
-        alert(data.error || 'Action failed');
-      }
-    } catch (err) {
-      alert('Network error');
-    }
+  const handleAction = (id, action) => {
+    // Optimistic UI
+    setRequests(prev => prev.filter(r => r.request_id !== id));
+    
+    // Queue change
+    addChange({ type: action === 'approve' ? 'APPROVE_HARVEST' : 'REJECT_HARVEST', id });
   };
 
   return (
@@ -60,7 +54,7 @@ export default function Dashboard() {
         ) : error ? (
           <p style={{ color: 'var(--danger)' }}>{error}</p>
         ) : requests.length === 0 ? (
-          <div style={{ padding: '2rem', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
+          <div style={{ padding: '2rem', textAlign: 'center', background: 'var(--panel-inner-bg)', borderRadius: '8px' }}>
             <p style={{ color: 'var(--text-secondary)' }}>No pending harvest requests at this time.</p>
           </div>
         ) : (

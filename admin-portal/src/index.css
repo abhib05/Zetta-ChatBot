@@ -1,14 +1,20 @@
 :root {
-  --bg-color: #0f172a;
-  --panel-bg: rgba(30, 41, 59, 0.7);
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --primary: #3b82f6;
-  --primary-hover: #2563eb;
+  --bg-color: #f8fafc;
+  --panel-bg: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --primary: #000000;
+  --primary-hover: #333333;
   --success: #10b981;
   --danger: #ef4444;
-  --border: rgba(255, 255, 255, 0.1);
-  --glass-blur: blur(12px);
+  --danger-bg: rgba(239, 68, 68, 0.1);
+  --danger-border: rgba(239, 68, 68, 0.3);
+  --border: rgba(0, 0, 0, 0.1);
+  --glass-blur: blur(0px);
+  --highlight-bg: rgba(0, 0, 0, 0.05);
+  --code-bg: rgba(0, 0, 0, 0.05);
+  --neutral-bg: #f1f5f9;
+  --panel-inner-bg: #f8fafc;
 }
 
 * {
@@ -24,9 +30,6 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
-  background-image: 
-    radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.15), transparent 25%),
-    radial-gradient(circle at 85% 30%, rgba(16, 185, 129, 0.15), transparent 25%);
 }
 
 a {
@@ -71,7 +74,7 @@ h3 { font-size: 1.25rem; }
 
 input, select, textarea {
   width: 100%;
-  background: rgba(15, 23, 42, 0.6);
+  background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem 1rem;
@@ -84,7 +87,7 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.1);
 }
 
 input:disabled {
@@ -122,6 +125,11 @@ input:disabled {
   color: white;
 }
 
+.btn-warning {
+  background: #f59e0b;
+  color: white;
+}
+
 .btn-success {
   background: var(--success);
   color: white;
@@ -134,13 +142,14 @@ input:disabled {
 }
 
 .btn-outline:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--highlight-bg);
 }
 
 /* Layout */
 .app-container {
   display: flex;
   min-height: 100vh;
+  position: relative;
 }
 
 .sidebar {
@@ -171,7 +180,7 @@ input:disabled {
 }
 
 .nav-item:hover, .nav-item.active {
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--highlight-bg);
   color: var(--primary);
 }
 
@@ -211,7 +220,7 @@ tbody tr {
 }
 
 tbody tr:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--highlight-bg);
 }
 
 /* Badges */
@@ -225,17 +234,27 @@ tbody tr:hover {
 
 .badge-warning {
   background: rgba(245, 158, 11, 0.2);
-  color: #fbbf24;
+  color: #d97706;
 }
 
 .badge-success {
   background: rgba(16, 185, 129, 0.2);
-  color: #34d399;
+  color: #059669;
 }
 
 .badge-error {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
+  background: var(--danger-bg);
+  color: #b91c1c;
+}
+
+.badge-info {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+
+.badge-neutral {
+  background: rgba(148, 163, 184, 0.2);
+  color: #475569;
 }
 
 /* Animations */

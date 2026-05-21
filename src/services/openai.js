@@ -85,6 +85,7 @@ async function normalizeAndValidate(filledJson, dbCache) {
   // Terse prompt saves ~150 tokens vs the verbose version
   const systemPrompt = `Normalize farm JSON. Return ONLY corrected JSON inside <SAVE_DATA> tags.
 Rules: convert text numbers to Int/Float, time strings to minutes, set unconvertible numerics to null.
+Ensure power_source is exactly 'solar', 'electricity', 'generator', or null.
 Correct typos in plot_name/crop_name/machine_name against:
 Plots: ${dbCache.plots.map(p => p.plot_code).join(', ')}
 Crops: ${dbCache.allCrops.map(c => c.crop_name).join(', ')}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, UserPlus, X, Link2 } from 'lucide-react';
+import { usePendingChanges } from './hooks/usePendingChanges';
 
 const API = 'http://localhost:3000/admin';
 const headers = () => ({
@@ -9,21 +10,23 @@ const headers = () => ({
 
 export default function Employees() {
   const [employees, setEmployees] = useState([]);
-  const [farms, setFarms] = useState([]);
+  const [farms, setFarms] = useState([]); // This will hold UNASSIGNED farms
   const [showNewEmployee, setShowNewEmployee] = useState(false);
   const [newEmployee, setNewEmployee] = useState({ employee_code: '', employee_name: '' });
   const [error, setError] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [assignedFarms, setAssignedFarms] = useState([]);
   const [assignFarmId, setAssignFarmId] = useState('');
+  
+  const { addChange } = usePendingChanges();
 
   const fetchEmployees = async () => {
     const res = await fetch(`${API}/employees`, { headers: headers() });
     if (res.ok) setEmployees(await res.json());
   };
 
-  const fetchFarms = async () => {
-    const res = await fetch(`${API}/farms`, { headers: headers() });
+  const fetchUnassignedFarms = async () => {
+    const res = await fetch(`${API}/farms/unassigned`, { headers: headers() });
     if (res.ok) setFarms(await res.json());
   };
 
@@ -32,23 +35,25 @@ export default function Employees() {
     if (res.ok) setAssignedFarms(await res.json());
   };
 
-  useEffect(() => { fetchEmployees(); fetchFarms(); }, []);
+  useEffect(() => { 
+    fetchEmployees(); 
+    fetchUnassignedFarms(); 
+  }, []);
 
-  const handleCreateEmployee = async (e) => {
+  const handleCreateEmployee = (e) => {
     e.preventDefault();
-    setError('');
-    const res = await fetch(`${API}/employees`, {
-      method: 'POST', headers: headers(),
-      body: JSON.stringify(newEmployee)
-    });
-    if (res.ok) {
-      setNewEmployee({ employee_code: '', employee_name: '' });
-      setShowNewEmployee(false);
-      fetchEmployees();
-    } else {
-      const data = await res.json();
-      setError(data.error);
-    }
+    if (!newEmployee.employee_code || !newEmployee.employee_name) return;
+    
+    // Optimistic UI
+    const tempId = 'temp-' + Date.now();
+    const newEmp = { ...newEmployee, employee_id: tempId, active: true };
+    setEmployees(prev => [...prev, newEmp]);
+    
+    // Queue change
+    addChange({ type: 'CREATE_EMPLOYEE', payload: newEmployee });
+    
+    setNewEmployee({ employee_code: '', employee_name: '' });
+    setShowNewEmployee(false);
   };
 
   const selectEmployee = (emp) => {
@@ -57,50 +62,69 @@ export default function Employees() {
     setAssignFarmId('');
   };
 
-  const handleAssignFarm = async () => {
-    if (!assignFarmId) return;
-    setError('');
-    const res = await fetch(`${API}/farm-memberships`, {
-      method: 'POST', headers: headers(),
-      body: JSON.stringify({ employee_id: selectedEmployee.employee_id, farm_id: assignFarmId, role: 'Member' })
-    });
-    if (res.ok) {
-      setAssignFarmId('');
-      fetchAssignedFarms(selectedEmployee.employee_id);
-    } else {
-      const data = await res.json();
-      setError(data.error);
+  const handleAssignFarm = () => {
+    if (!assignFarmId || !selectedEmployee) return;
+    
+    const farmToAssign = farms.find(f => f.farm_id === assignFarmId);
+    if (!farmToAssign) return;
+
+    // Optimistic UI
+    const tempMembershipId = 'temp-mem-' + Date.now();
+    setAssignedFarms(prev => [...prev, {
+      id: tempMembershipId,
+      role: 'Member',
+      farms: { farm_id: farmToAssign.farm_id, farm_code: farmToAssign.farm_code, farm_name: farmToAssign.farm_name }
+    }]);
+    setFarms(prev => prev.filter(f => f.farm_id !== assignFarmId));
+    setAssignFarmId('');
+
+    // Queue change
+    addChange({ type: 'ASSIGN_FARM', employee_id: selectedEmployee.employee_id, farm_id: farmToAssign.farm_id });
+  };
+
+  const handleUnassignFarm = (membershipId, farmObj) => {
+    // Optimistic UI
+    setAssignedFarms(prev => prev.filter(af => af.id !== membershipId));
+    setFarms(prev => [...prev, { farm_id: farmObj.farm_id, farm_code: farmObj.farm_code, farm_name: farmObj.farm_name }]);
+
+    // Queue change
+    // Only queue DELETE if it's a real ID from the DB
+    if (!String(membershipId).startsWith('temp-')) {
+      addChange({ type: 'DELETE_MEMBERSHIP', id: membershipId });
     }
   };
 
-  const handleUnassignFarm = async (membershipId) => {
-    const res = await fetch(`${API}/farm-memberships/${membershipId}`, {
-      method: 'DELETE', headers: headers()
-    });
-    if (res.ok) {
-      fetchAssignedFarms(selectedEmployee.employee_id);
+  const handleDeactivateEmployee = (emp) => {
+    // Optimistic UI
+    setEmployees(prev => prev.map(e => e.employee_id === emp.employee_id ? { ...e, active: false } : e));
+    
+    if (selectedEmployee?.employee_id === emp.employee_id) {
+       // All assigned farms become unassigned
+       setFarms(prev => [...prev, ...assignedFarms.map(af => af.farms)]);
+       setAssignedFarms([]);
+    }
+
+    // Queue change
+    if (!String(emp.employee_id).startsWith('temp-')) {
+       addChange({ type: 'DEACTIVATE_EMPLOYEE', id: emp.employee_id });
     }
   };
-
-  // Get farm IDs that are already assigned
-  const assignedFarmIds = assignedFarms.map(af => af.farms?.farm_id);
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h1>Employee Management</h1>
+        <h1 style={{ color: 'var(--text-primary)' }}>Employee Management</h1>
         <button className="btn btn-primary" onClick={() => setShowNewEmployee(!showNewEmployee)}>
           <UserPlus size={16} /> New Employee
         </button>
       </div>
 
       {error && (
-        <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', marginBottom: '1rem', fontSize: '0.875rem' }}>
+        <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--danger-bg)', border: '1px solid var(--danger)', color: 'var(--danger)', marginBottom: '1rem', fontSize: '0.875rem' }}>
           {error}
         </div>
       )}
 
-      {/* New Employee Form */}
       {showNewEmployee && (
         <div className="glass-panel fade-in" style={{ marginBottom: '1.5rem' }}>
           <h3>Create New Employee</h3>
@@ -121,7 +145,6 @@ export default function Employees() {
       )}
 
       <div className="grid-2">
-        {/* Left: Employee List */}
         <div className="glass-panel">
           <h3>All Employees</h3>
           <div className="table-container">
@@ -131,6 +154,7 @@ export default function Employees() {
                   <th>Code</th>
                   <th>Name</th>
                   <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -140,7 +164,7 @@ export default function Employees() {
                     onClick={() => selectEmployee(emp)}
                     style={{
                       cursor: 'pointer',
-                      background: selectedEmployee?.employee_id === emp.employee_id ? 'rgba(59, 130, 246, 0.1)' : 'transparent'
+                      background: selectedEmployee?.employee_id === emp.employee_id ? 'var(--highlight-bg)' : 'transparent'
                     }}
                   >
                     <td style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}>{emp.employee_code}</td>
@@ -149,8 +173,15 @@ export default function Employees() {
                       {emp.active ? (
                         <span className="badge badge-success">Active</span>
                       ) : (
-                        <span className="badge badge-error">Inactive</span>
+                        <span className="badge badge-neutral">Inactive</span>
                       )}
+                    </td>
+                    <td>
+                       {emp.active && (
+                         <button className="btn btn-outline" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={(e) => { e.stopPropagation(); handleDeactivateEmployee(emp); }}>
+                           Deactivate
+                         </button>
+                       )}
                     </td>
                   </tr>
                 ))}
@@ -159,7 +190,6 @@ export default function Employees() {
           </div>
         </div>
 
-        {/* Right: Farm Assignments */}
         <div className="glass-panel">
           {selectedEmployee ? (
             <>
@@ -168,23 +198,27 @@ export default function Employees() {
                 Farm Assignments for {selectedEmployee.employee_name}
               </h3>
               <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.875rem' }}>
-                Code: <code style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px' }}>{selectedEmployee.employee_code}</code>
+                Code: <code style={{ background: 'var(--code-bg)', padding: '2px 6px', borderRadius: '4px' }}>{selectedEmployee.employee_code}</code>
               </p>
 
-              {/* Assign new farm */}
-              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-                <select value={assignFarmId} onChange={e => setAssignFarmId(e.target.value)} style={{ flex: 1 }}>
-                  <option value="">Select a farm to assign...</option>
-                  {farms.filter(f => !assignedFarmIds.includes(f.farm_id)).map(f => (
-                    <option key={f.farm_id} value={f.farm_id}>{f.farm_code} — {f.farm_name}</option>
-                  ))}
-                </select>
-                <button className="btn btn-primary" onClick={handleAssignFarm} disabled={!assignFarmId}>
-                  <Plus size={16} /> Assign
-                </button>
-              </div>
+              {selectedEmployee.active ? (
+                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                  <select value={assignFarmId} onChange={e => setAssignFarmId(e.target.value)} style={{ flex: 1 }}>
+                    <option value="">Select an unassigned farm...</option>
+                    {farms.map(f => (
+                      <option key={f.farm_id} value={f.farm_id}>{f.farm_code} — {f.farm_name}</option>
+                    ))}
+                  </select>
+                  <button className="btn btn-primary" onClick={handleAssignFarm} disabled={!assignFarmId}>
+                    <Plus size={16} /> Assign
+                  </button>
+                </div>
+              ) : (
+                <div style={{ padding: '1rem', background: 'var(--neutral-bg)', borderRadius: '8px', marginBottom: '1.5rem' }}>
+                  <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.875rem' }}>This employee is inactive. All farm assignments have been released.</p>
+                </div>
+              )}
 
-              {/* Assigned farms list */}
               {assignedFarms.length === 0 ? (
                 <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
                   No farms assigned yet.
@@ -192,12 +226,12 @@ export default function Employees() {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {assignedFarms.map(af => (
-                    <div key={af.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                    <div key={af.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', background: 'var(--panel-inner-bg)', borderRadius: '8px', border: '1px solid var(--border)' }}>
                       <div>
                         <strong>{af.farms?.farm_code}</strong>
                         <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>{af.farms?.farm_name}</span>
                       </div>
-                      <button className="btn btn-outline" style={{ padding: '0.4rem', color: 'var(--danger)' }} onClick={() => handleUnassignFarm(af.id)}>
+                      <button className="btn btn-outline" style={{ padding: '0.4rem', color: 'var(--danger)', borderColor: 'var(--danger-border)' }} onClick={() => handleUnassignFarm(af.id, af.farms)}>
                         <X size={16} />
                       </button>
                     </div>
