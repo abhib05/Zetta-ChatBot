@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS farm_memberships (
   employee_id UUID NOT NULL REFERENCES employees(employee_id) ON DELETE CASCADE,
   farm_id UUID NOT NULL REFERENCES farms(farm_id) ON DELETE CASCADE,
   role TEXT NOT NULL,
-  UNIQUE (employee_id, farm_id)
+  UNIQUE (employee_id, farm_id),
+  CONSTRAINT uq_farm_single_employee UNIQUE (farm_id)
 );
 
 CREATE TABLE IF NOT EXISTS harvest_requests (
@@ -231,6 +232,25 @@ ALTER TABLE dts_submissions
 ALTER TABLE dts_activity_entries
   ADD CONSTRAINT chk_activity_acres_nonnegative
   CHECK (acres IS NULL OR acres >= 0);
+
+-- ============================================================
+-- DB TRIGGERS
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION release_farms_on_deactivation()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.active = FALSE AND OLD.active = TRUE THEN
+    DELETE FROM farm_memberships WHERE employee_id = NEW.employee_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_release_farms_on_deactivation
+AFTER UPDATE OF active ON employees
+FOR EACH ROW
+EXECUTE FUNCTION release_farms_on_deactivation();
 
 -- ============================================================
 -- OPTIONAL SEED DATA FOR ACTIVITY TYPES
