@@ -266,7 +266,6 @@ async function deleteActivityEntry(entryId) {
   }
   return true;
 }
-
 module.exports = { 
   validateEmployeeCode,
   validateEmployeeFarmAccess,
