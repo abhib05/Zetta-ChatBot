@@ -108,11 +108,38 @@ async function getFarmDetails(farmId) {
     .select('employee_id, employee_name')
     .eq('active', true);
 
+  // Fetch already submitted activities for today
+  const today = new Date().toISOString().split('T')[0];
+  const { data: submission } = await supabase
+    .from('dts_submissions')
+    .select('submission_id')
+    .eq('farm_id', farmId)
+    .eq('report_date', today)
+    .limit(1)
+    .maybeSingle();
+
+  let submittedToday = [];
+  if (submission) {
+    const { data: acts } = await supabase
+      .from('dts_activity_entries')
+      .select('entry_id, plot_id, activity_types(name)')
+      .eq('submission_id', submission.submission_id);
+      
+    if (acts) {
+      submittedToday = acts.map(a => ({
+        entry_id: a.entry_id,
+        plot_id: a.plot_id,
+        activity_type_name: a.activity_types?.name
+      }));
+    }
+  }
+
   return {
     plots: plots || [],
     allCrops: allCrops || [],
     machines: machines || [],
-    employees: employees || []
+    employees: employees || [],
+    submittedToday
   };
 }
 
@@ -224,6 +251,21 @@ async function checkDuplicateActivities(farmId, date, activitiesToCheck) {
   return duplicates;
 }
 
+/**
+ * Delete a specific activity entry.
+ */
+async function deleteActivityEntry(entryId) {
+  const { error } = await supabase
+    .from('dts_activity_entries')
+    .delete()
+    .eq('entry_id', entryId);
+    
+  if (error) {
+    console.error('Error deleting activity entry:', error);
+    return false;
+  }
+  return true;
+}
 module.exports = { 
   validateEmployeeCode,
   validateEmployeeFarmAccess,
@@ -232,5 +274,6 @@ module.exports = {
   saveFarmOnboarding, 
   saveDTSSubmission, 
   checkDuplicateSubmission,
-  checkDuplicateActivities
+  checkDuplicateActivities,
+  deleteActivityEntry
 };
