@@ -9,7 +9,7 @@ const whatsappService = require('../services/whatsapp');
 const { handleEmployeeCode, handleFarmCode } = require('./steps/auth');
 const { handleOnboarding } = require('./steps/onboarding');
 const { promptActivities, handleSelectActivities, handleActivityLoop } = require('./steps/activities');
-const { handleMissingFields, handleConfirmConversion } = require('./steps/parsing');
+const { handleMissingFields, handleConfirmConversion, handleDBOverwriteChoice, handleDBDeleteRecord } = require('./steps/parsing');
 const { handleFinalReview, handleMoreActivities, handleConfirmDelete, handlePendingAuthorization, handleNoActivityReason } = require('./steps/review');
 
 async function handleIncomingMessage(from, body) {
@@ -63,6 +63,8 @@ async function handleIncomingMessage(from, body) {
       case 'LOOP_ACTIVITIES': return handleActivityLoop(from, msg, session);
       case 'MISSING_FIELDS': return handleMissingFields(from, msg, session);
       case 'CONFIRM_CONVERSION': return handleConfirmConversion(from, msg, session);
+      case 'CONFIRM_DB_OVERWRITE_CHOICE': return handleDBOverwriteChoice(from, msg, session);
+      case 'CONFIRM_DB_DELETE_RECORD': return handleDBDeleteRecord(from, msg, session);
       case 'FINAL_REVIEW': return handleFinalReview(from, msg, session);
       case 'ASK_MORE_ACTIVITIES': return handleMoreActivities(from, msg, session);
       case 'ASK_NO_ACTIVITY_REASON': return handleNoActivityReason(from, msg, session);

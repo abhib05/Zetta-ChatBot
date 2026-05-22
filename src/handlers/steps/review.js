@@ -25,19 +25,22 @@ async function handleFinalReview(from, msg, session) {
       });
       await whatsappService.sendMessage(from, text);
 
-      // Filter out duplicates
-      session.parsedJSON.activities = session.parsedJSON.activities.filter(a => {
-        const actName = a.activity_type_name || a.activity;
-        return !duplicates.find(d => 
-          (d.activity_type_name || d.activity) === actName && 
-          d.plot_id === a.plot_id
-        );
-      });
-      await sessionService.setSession(from, session);
+      // Filter out duplicates safely
+      if (session.parsedJSON && Array.isArray(session.parsedJSON.activities)) {
+        session.parsedJSON.activities = session.parsedJSON.activities.filter(a => {
+          const actName = a.activity_type_name || a.activity;
+          return !duplicates.find(d => 
+            (d.activity_type_name || d.activity) === actName && 
+            d.plot_id === a.plot_id
+          );
+        });
+        
+        await sessionService.setSession(from, session);
 
-      if (session.parsedJSON.activities.length === 0) {
-        await sessionService.deleteSession(from);
-        return whatsappService.sendMessage(from, `No remaining unique activities to submit. Session discarded. Send your Employee Code to start a new report.`);
+        if (session.parsedJSON.activities.length === 0) {
+          await sessionService.deleteSession(from);
+          return whatsappService.sendMessage(from, `No remaining unique activities to submit. Session discarded. Send your Employee Code to start a new report.`);
+        }
       }
     }
 
@@ -107,9 +110,11 @@ async function handleConfirmDelete(from, msg, session) {
   const label = ACTIVITY_TYPES.find(a => a.name === session.conflictAct).label;
 
   if (lower.includes('yes') || lower.includes('y')) {
-    // Delete from array
-    session.selectedActivities = session.selectedActivities.filter(a => a !== session.conflictAct);
-    session.parsedJSON.activities = session.parsedJSON.activities.filter(a => a.activity_type_name !== session.conflictAct);
+    // Delete from array safely
+    session.selectedActivities = (session.selectedActivities || []).filter(a => a !== session.conflictAct);
+    if (session.parsedJSON && Array.isArray(session.parsedJSON.activities)) {
+      session.parsedJSON.activities = session.parsedJSON.activities.filter(a => a.activity_type_name !== session.conflictAct);
+    }
     
     // Add back to end of queue to re-ask
     session.selectedActivities.push(session.conflictAct);

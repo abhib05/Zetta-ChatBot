@@ -1,6 +1,7 @@
 const sessionService = require('../../services/session');
 const whatsappService = require('../../services/whatsapp');
 const openaiService = require('../../services/openai');
+const supabaseService = require('../../services/supabase');
 const { ACTIVITY_TYPES, EXPECTED_DETAILS } = require('./constants');
 
 function getReview() { return require('./review'); }
@@ -23,22 +24,43 @@ async function runAIParsing(from, session) {
     // Call 1: Parse unstructured -> JSON
     const parsed = await openaiService.parseActivities(transcript, session.dbCache);
     
-    if (!parsed || !parsed.activities) {
+    if (!parsed) {
       return whatsappService.sendMessage(from, `Failed to analyze text. Please try again.`);
+    }
+
+    // Defensive check: Ensure activities is an array
+    if (!parsed.activities || !Array.isArray(parsed.activities)) {
+      parsed.activities = [];
+    }
+
+    if (parsed.activities.length === 0) {
+      return whatsappService.sendMessage(from, `Could not extract activity details. Please provide more clear information or try again.`);
     }
 
     if (!session.parsedJSON) {
       session.parsedJSON = parsed;
     } else {
-      if (!session.parsedJSON.activities) session.parsedJSON.activities = [];
+      if (!session.parsedJSON.activities || !Array.isArray(session.parsedJSON.activities)) {
+        session.parsedJSON.activities = [];
+      }
       session.parsedJSON.activities.push(...parsed.activities);
     }
   }
 
   // Build missing fields queue.
   session.missingFieldsQueue = [];
-  session.parsedJSON.activities.forEach((act, idx) => {
-    ['plot_name', 'labour_count', 'duration_minutes'].forEach(field => {
+  
+  // Safety check before iterating
+  if (session.parsedJSON && Array.isArray(session.parsedJSON.activities)) {
+    session.parsedJSON.activities.forEach((act, idx) => {
+      if (!act) return;
+      
+      // If AI extracted plot name, queue an upfront duplicate check
+      if (act.plot_name) {
+        session.missingFieldsQueue.push({ activityIndex: idx, actName: act.activity_type_name, field: 'db_duplicate_check', isDetail: false, prefilledPlotName: act.plot_name });
+      }
+
+      ['plot_name', 'labour_count', 'duration_minutes'].forEach(field => {
       if (act[field] === null || act[field] === undefined) {
         session.missingFieldsQueue.push({ activityIndex: idx, actName: act.activity_type_name, field, isDetail: false });
       }
@@ -53,6 +75,7 @@ async function runAIParsing(from, session) {
       }
     });
   });
+  }
 
   if (session.missingFieldsQueue.length > 0) {
     session.state = 'MISSING_FIELDS';
@@ -66,6 +89,55 @@ async function runAIParsing(from, session) {
 
 async function askNextMissingField(from, session) {
   const missing = session.missingFieldsQueue[0];
+  
+  if (missing.field === 'db_duplicate_check') {
+    const plotName = missing.prefilledPlotName;
+    const plot = session.dbCache.plots.find(p => p.plot_code.toLowerCase() === plotName.toLowerCase());
+    
+    if (plot) {
+      const act = session.parsedJSON.activities[missing.activityIndex];
+      // 1. Sowing conflict
+      if (act.activity_type_name === 'sowing_transplanting' && plot.current_crop_id) {
+        session.parsedJSON.activities.splice(missing.activityIndex, 1);
+        session.missingFieldsQueue = session.missingFieldsQueue.filter(q => q.activityIndex !== missing.activityIndex);
+        session.missingFieldsQueue.forEach(q => {
+          if (q.activityIndex > missing.activityIndex) q.activityIndex--;
+        });
+        await whatsappService.sendMessage(from, `⚠️ Plot ${plot.plot_code} already has a crop. Sowing activity skipped.`);
+        
+        if (session.missingFieldsQueue.length > 0) {
+          await sessionService.setSession(from, session);
+          return askNextMissingField(from, session);
+        } else {
+          return runAIValidation(from, session);
+        }
+      }
+      
+      // 2. Daily Duplicate DB Check
+      const duplicate = session.dbCache.submittedToday?.find(s => s.plot_id === plot.plot_id && s.activity_type_name === act.activity_type_name);
+      if (duplicate) {
+        session.state = 'CONFIRM_DB_OVERWRITE_CHOICE';
+        session.pendingOverwrite = {
+          missingIndex: missing.activityIndex,
+          plotCode: plot.plot_code,
+          activityName: act.activity_type_name,
+          entryId: duplicate.entry_id
+        };
+        await sessionService.setSession(from, session);
+        return whatsappService.sendMessage(from, `⚠️ You have already submitted a ${act.activity_type_name} report for Plot ${plot.plot_code} today.\n\nDo you want to modify the existing record or skip it? (Reply Modify / Skip)`);
+      }
+    }
+    
+    // No conflict, pop check and move to the real missing field!
+    session.missingFieldsQueue.shift();
+    if (session.missingFieldsQueue.length > 0) {
+      await sessionService.setSession(from, session);
+      return askNextMissingField(from, session);
+    } else {
+      return runAIValidation(from, session);
+    }
+  }
+
   const label = ACTIVITY_TYPES.find(a => a.name === missing.actName).label;
   const friendlyField = missing.field.replace(/_/g, ' ');
 
@@ -81,8 +153,17 @@ async function askNextMissingField(from, session) {
 }
 
 async function handleMissingFields(from, msg, session) {
+  if (!session.missingFieldsQueue || session.missingFieldsQueue.length === 0) {
+    return runAIValidation(from, session);
+  }
+
   const missing = session.missingFieldsQueue[0];
-  const act = session.parsedJSON.activities[missing.activityIndex];
+  const act = session.parsedJSON?.activities?.[missing.activityIndex];
+
+  if (!act) {
+    session.missingFieldsQueue.shift();
+    return handleMissingFields(from, msg, session); // skip invalid activity
+  }
 
   let mainVal = msg;
   let extractedUnit = null;
@@ -154,6 +235,17 @@ async function handleMissingFields(from, msg, session) {
     act.details[missing.field] = mainVal;
   } else {
     act[missing.field] = mainVal;
+  }
+
+  // Dynamic insertion of db_duplicate_check if plot_name was just provided
+  if (!missing.isDetail && missing.field === 'plot_name') {
+    session.missingFieldsQueue.splice(1, 0, {
+      activityIndex: missing.activityIndex,
+      actName: act.activity_type_name,
+      field: 'db_duplicate_check',
+      isDetail: false,
+      prefilledPlotName: mainVal
+    });
   }
 
   // If we extracted a unit from the quantity answer, fill it and remove from queue
@@ -249,7 +341,12 @@ async function runAIValidation(from, session) {
   const normalized = await openaiService.normalizeAndValidate(session.parsedJSON, session.dbCache);
 
   if (!normalized) {
-    return whatsappService.sendMessage(from, `Validation failed.`);
+    return whatsappService.sendMessage(from, `Validation failed. Please try again.`);
+  }
+
+  // Defensive check to ensure normalized has an activities array
+  if (!normalized.activities || !Array.isArray(normalized.activities)) {
+    normalized.activities = session.parsedJSON?.activities || [];
   }
 
   session.parsedJSON = normalized;
@@ -259,4 +356,94 @@ async function runAIValidation(from, session) {
   await getReview().promptFinalReview(from);
 }
 
-module.exports = { runAIParsing, handleMissingFields, handleConfirmConversion, runAIValidation };
+async function handleDBOverwriteChoice(from, msg, session) {
+  const lower = msg.toLowerCase();
+  const { missingIndex, plotCode } = session.pendingOverwrite;
+  
+  if (lower.includes('modify')) {
+    session.state = 'CONFIRM_DB_DELETE_RECORD';
+    await sessionService.setSession(from, session);
+    return whatsappService.sendMessage(from, `Are you sure you want to completely delete the previous record for Plot ${plotCode} and re-enter it? (Reply Yes / No)`);
+  } else if (lower.includes('skip')) {
+    // Drop the activity entirely
+    session.parsedJSON.activities.splice(missingIndex, 1);
+    session.missingFieldsQueue = session.missingFieldsQueue.filter(q => q.activityIndex !== missingIndex);
+    session.missingFieldsQueue.forEach(q => {
+      if (q.activityIndex > missingIndex) q.activityIndex--;
+    });
+    
+    session.pendingOverwrite = null;
+    session.missingFieldsQueue.shift(); // remove the db_duplicate_check
+    
+    await whatsappService.sendMessage(from, `Skipped activity for Plot ${plotCode}.`);
+    
+    if (session.missingFieldsQueue.length > 0) {
+      session.state = 'MISSING_FIELDS';
+      await sessionService.setSession(from, session);
+      return askNextMissingField(from, session);
+    } else {
+      return runAIValidation(from, session);
+    }
+  } else {
+    return whatsappService.sendMessage(from, `Please reply with "Modify" to overwrite the existing record, or "Skip" to discard this new entry.`);
+  }
+}
+
+async function handleDBDeleteRecord(from, msg, session) {
+  const lower = msg.toLowerCase();
+  const { missingIndex, plotCode, entryId } = session.pendingOverwrite;
+  
+  if (lower.includes('yes') || lower.includes('y')) {
+    await whatsappService.sendMessage(from, `Deleting old record from database...`);
+    
+    const success = await supabaseService.deleteActivityEntry(entryId);
+    
+    if (success) {
+      // Remove it from submittedToday cache so it doesn't trigger again
+      session.dbCache.submittedToday = session.dbCache.submittedToday.filter(s => s.entry_id !== entryId);
+      
+      session.pendingOverwrite = null;
+      session.missingFieldsQueue.shift(); // remove the db_duplicate_check
+      
+      await whatsappService.sendMessage(from, `Old record deleted. You may now enter the new details.`);
+      
+      if (session.missingFieldsQueue.length > 0) {
+        session.state = 'MISSING_FIELDS';
+        await sessionService.setSession(from, session);
+        return askNextMissingField(from, session);
+      } else {
+        return runAIValidation(from, session);
+      }
+    } else {
+      await whatsappService.sendMessage(from, `Failed to delete record. Please contact support. Skipping this activity.`);
+      // Fall through to skip logic
+    }
+  }
+
+  // If "No" or deletion failed, skip the activity
+  session.parsedJSON.activities.splice(missingIndex, 1);
+  session.missingFieldsQueue = session.missingFieldsQueue.filter(q => q.activityIndex !== missingIndex);
+  session.missingFieldsQueue.forEach(q => {
+    if (q.activityIndex > missingIndex) q.activityIndex--;
+  });
+  
+  session.pendingOverwrite = null;
+  session.missingFieldsQueue.shift(); // remove the db_duplicate_check
+  
+  if (session.missingFieldsQueue.length > 0) {
+    session.state = 'MISSING_FIELDS';
+    await sessionService.setSession(from, session);
+    return askNextMissingField(from, session);
+  } else {
+    return runAIValidation(from, session);
+  }
+}
+
+module.exports = { 
+  runAIParsing, 
+  handleMissingFields, 
+  handleConfirmConversion, 
+  handleDBOverwriteChoice,
+  handleDBDeleteRecord,
+  runAIValidation 
+};

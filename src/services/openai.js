@@ -51,10 +51,29 @@ async function parseActivities(transcript, dbCache) {
 
   // Terse prompt — no example block, saves ~200 tokens per call
   const systemPrompt = `Farm data extractor. Output ONLY JSON inside <SAVE_DATA> tags.
+Must strictly follow this JSON schema:
+{
+  "activities": [
+    {
+      "activity_type_name": "...",
+      "plot_name": "...",
+      "crop_name": "...",
+      "acres": null,
+      "labour_count": null,
+      "duration_minutes": null,
+      "expense_amount": null,
+      "remarks": null,
+      "details": { ... }
+    }
+  ],
+  "deviation_notes": null,
+  "next_day_plans": null,
+  "agronomy_report": null
+}
+
 Plots: [${plotsList}] | Crops: [${cropsList}] | Machines: [${machinesList}]
 Activity types: land_preparation, sowing_transplanting, irrigation, weeding, agri_inputs, other_machinery_usage, harvest.
-Generic fields per activity: activity_type_name, plot_name, crop_name, acres, labour_count, duration_minutes, expense_amount, remarks.
-Details fields:
+Details fields for 'details' object:
  land_preparation: activity_name,machine_name,time_minutes
  sowing_transplanting: seed_rate_per_acre,plants_sown,sowing_method,machine_time_minutes
  irrigation: irrigation_method,power_source,fuel_used_litres
@@ -62,7 +81,7 @@ Details fields:
  agri_inputs: input_method,input_type,input_name,input_qty
  other_machinery_usage: machine_name,fuel_used_litres
  harvest: harvest_cycle_no,harvesting_method,quantity,unit,machine_time_minutes
-Set MISSING fields to null. DO NOT GUESS. Also output deviation_notes,next_day_plans,agronomy_report at top level.`;
+Set MISSING fields to null. DO NOT GUESS.`;
 
   const response = await callWithRetry(() => openai.chat.completions.create({
     model: config.openai.model,
@@ -70,6 +89,7 @@ Set MISSING fields to null. DO NOT GUESS. Also output deviation_notes,next_day_p
       { role: 'system', content: systemPrompt },
       { role: 'user', content: transcript }
     ],
+    max_tokens: 4000,
     temperature: 0.1,
   }), 'parse');
 
@@ -83,6 +103,13 @@ Set MISSING fields to null. DO NOT GUESS. Also output deviation_notes,next_day_p
 async function normalizeAndValidate(filledJson, dbCache) {
   // Terse prompt saves ~150 tokens vs the verbose version
   const systemPrompt = `Normalize farm JSON. Return ONLY corrected JSON inside <SAVE_DATA> tags.
+Must strictly follow this JSON schema:
+{
+  "activities": [ { ... } ],
+  "deviation_notes": null,
+  "next_day_plans": null,
+  "agronomy_report": null
+}
 Rules: convert text numbers to Int/Float, time strings to minutes, set unconvertible numerics to null.
 Ensure power_source is exactly 'solar', 'electricity', 'generator', or null.
 Correct typos in plot_name/crop_name/machine_name against:
@@ -96,6 +123,7 @@ Machines: ${dbCache.machines.map(m => m.machine_name).join(', ')}`;
       { role: 'system', content: systemPrompt },
       { role: 'user', content: JSON.stringify(filledJson) }  // compact JSON saves input tokens
     ],
+    max_tokens: 3000,
     temperature: 0.0,
   }), 'normalize');
 
@@ -103,14 +131,29 @@ Machines: ${dbCache.machines.map(m => m.machine_name).join(', ')}`;
 }
 
 function extractSaveData(aiResponse) {
+  let content = aiResponse;
   const match = aiResponse.match(/<SAVE_DATA>([\s\S]*?)<\/SAVE_DATA>/);
-  if (!match) return null;
+  if (match) {
+    content = match[1];
+  }
+
   try {
-    let cleanStr = match[1].trim();
+    let cleanStr = content.trim();
     cleanStr = cleanStr.replace(/^```(json)?|```$/gm, '').trim();
+    
+    // Attempt fallback JSON extraction if no proper start
+    if (!cleanStr.startsWith('{')) {
+      const firstBrace = cleanStr.indexOf('{');
+      const lastBrace = cleanStr.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1) {
+        cleanStr = cleanStr.substring(firstBrace, lastBrace + 1);
+      }
+    }
+    
     return JSON.parse(cleanStr);
   } catch (e) {
-    console.error('⚠️  Failed to parse SAVE_DATA JSON:', e.message);
+    console.error('⚠️  Failed to parse JSON:', e.message);
+    console.error('⚠️  Raw AI Response:', aiResponse);
     return null;
   }
 }
