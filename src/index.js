@@ -78,8 +78,22 @@ app.use('/webhook', webhookLimiter);
 // ROUTES
 // ─────────────────────────────────────────────
 
+const path = require('path');
+
 app.use('/webhook', webhookRouter);
 app.use('/admin', adminRouter);
+
+// Serve admin portal static files in production
+if (config.nodeEnv === 'production') {
+  app.use(express.static(path.join(__dirname, '../admin-portal/dist')));
+  app.get('*', (req, res, next) => {
+    // Skip static serving if the request looks like an API route
+    if (req.path.startsWith('/webhook') || req.path.startsWith('/admin') || req.path.startsWith('/health')) {
+      return next();
+    }
+    res.sendFile(path.join(__dirname, '../admin-portal/dist/index.html'));
+  });
+}
 
 // Health check — used by Railway/Render for uptime monitoring
 app.get('/health', (req, res) => {

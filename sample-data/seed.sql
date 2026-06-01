@@ -4,17 +4,17 @@
 -- ============================================================
 
 -- 1. Create Employees
--- 1. Create Employees
-INSERT INTO employees (employee_id, employee_code, employee_name, active) VALUES
-  ('e1a4d6ab-743f-4e0c-a968-3c35b8fc6e23', 'emp 001', 'Rajesh Patil', TRUE),
-  ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'emp 002', 'Suresh Kumar', TRUE),
-  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'emp 003', 'Priya Desai', TRUE),
-  ('e4a4d6ab-743f-4e0c-a968-3c35b8fc6e26', 'emp 004', 'Anita Sharma', TRUE),
-  ('e5a4d6ab-743f-4e0c-a968-3c35b8fc6e27', 'emp 005', 'Vikram Singh', TRUE)
+INSERT INTO employees (employee_id, employee_code, employee_name, active, phone_number) VALUES
+  ('e1a4d6ab-743f-4e0c-a968-3c35b8fc6e23', 'emp 001', 'Rajesh Patil', TRUE, '919999999901'),
+  ('e2a4d6ab-743f-4e0c-a968-3c35b8fc6e24', 'emp 002', 'Suresh Kumar', TRUE, '919999999902'),
+  ('e3a4d6ab-743f-4e0c-a968-3c35b8fc6e25', 'emp 003', 'Priya Desai', TRUE, '919999999903'),
+  ('e4a4d6ab-743f-4e0c-a968-3c35b8fc6e26', 'emp 004', 'Anita Sharma', TRUE, '919999999904'),
+  ('e5a4d6ab-743f-4e0c-a968-3c35b8fc6e27', 'emp 005', 'Vikram Singh', TRUE, '919999999905')
 ON CONFLICT (employee_id) DO UPDATE SET 
   employee_code = EXCLUDED.employee_code,
   employee_name = EXCLUDED.employee_name,
-  active = EXCLUDED.active;
+  active = EXCLUDED.active,
+  phone_number = EXCLUDED.phone_number;
 
 
 -- 2. Create Crops

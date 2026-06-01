@@ -266,6 +266,48 @@ async function deleteActivityEntry(entryId) {
   }
   return true;
 }
+
+/**
+ * Find active employee by their WhatsApp phone number.
+ * Returns employee info and their assigned farm or null.
+ */
+async function findEmployeeByPhone(phoneNumber) {
+  const { data: employee, error } = await supabase
+    .from('employees')
+    .select(`
+      employee_id,
+      employee_name,
+      employee_code,
+      active,
+      farm_memberships (
+        farms (
+          farm_id,
+          farm_code,
+          farm_name
+        )
+      )
+    `)
+    .eq('phone_number', phoneNumber.trim())
+    .eq('active', true)
+    .maybeSingle();
+
+  if (error || !employee) return null;
+
+  const farmMembership = employee.farm_memberships && employee.farm_memberships.length > 0 ? employee.farm_memberships[0] : null;
+  const farm = farmMembership?.farms || null;
+
+  return {
+    employee_id: employee.employee_id,
+    employee_name: employee.employee_name,
+    employee_code: employee.employee_code,
+    farm: farm ? {
+      farm_id: farm.farm_id,
+      farm_code: farm.farm_code,
+      farm_name: farm.farm_name
+    } : null
+  };
+}
+
 module.exports = { 
   validateEmployeeCode,
   validateEmployeeFarmAccess,
@@ -275,5 +317,6 @@ module.exports = {
   saveDTSSubmission, 
   checkDuplicateSubmission,
   checkDuplicateActivities,
-  deleteActivityEntry
+  deleteActivityEntry,
+  findEmployeeByPhone
 };

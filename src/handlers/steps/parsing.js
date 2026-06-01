@@ -5,6 +5,7 @@ const supabaseService = require('../../services/supabase');
 const { ACTIVITY_TYPES, EXPECTED_DETAILS } = require('./constants');
 
 function getReview() { return require('./review'); }
+function getActivities() { return require('./activities'); }
 
 async function runAIParsing(from, session) {
   await whatsappService.sendMessage(from, `Analyzing your report...`);
@@ -25,7 +26,12 @@ async function runAIParsing(from, session) {
     const parsed = await openaiService.parseActivities(transcript, session.dbCache);
     
     if (!parsed) {
-      return whatsappService.sendMessage(from, `Failed to analyze text. Please try again.`);
+      session.currentActivityIndex = 0;
+      session.collectedRaw = {};
+      session.state = 'LOOP_ACTIVITIES';
+      await sessionService.setSession(from, session);
+      await whatsappService.sendMessage(from, `⚠️ Failed to analyze your report. Let's try entering the details again.`);
+      return getActivities().askNextActivity(from, session);
     }
 
     // Defensive check: Ensure activities is an array
@@ -34,7 +40,12 @@ async function runAIParsing(from, session) {
     }
 
     if (parsed.activities.length === 0) {
-      return whatsappService.sendMessage(from, `Could not extract activity details. Please provide more clear information or try again.`);
+      session.currentActivityIndex = 0;
+      session.collectedRaw = {};
+      session.state = 'LOOP_ACTIVITIES';
+      await sessionService.setSession(from, session);
+      await whatsappService.sendMessage(from, `⚠️ Could not extract activity details. Let's try entering more clear details again.`);
+      return getActivities().askNextActivity(from, session);
     }
 
     if (!session.parsedJSON) {
@@ -373,7 +384,6 @@ async function handleDBOverwriteChoice(from, msg, session) {
     });
     
     session.pendingOverwrite = null;
-    session.missingFieldsQueue.shift(); // remove the db_duplicate_check
     
     await whatsappService.sendMessage(from, `Skipped activity for Plot ${plotCode}.`);
     
@@ -428,7 +438,6 @@ async function handleDBDeleteRecord(from, msg, session) {
   });
   
   session.pendingOverwrite = null;
-  session.missingFieldsQueue.shift(); // remove the db_duplicate_check
   
   if (session.missingFieldsQueue.length > 0) {
     session.state = 'MISSING_FIELDS';

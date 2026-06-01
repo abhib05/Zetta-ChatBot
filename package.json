@@ -27,6 +27,7 @@
     "string-similarity": "^4.0.4"
   },
   "devDependencies": {
+    "eslint": "^8.56.0",
     "nodemon": "^3.0.2"
   },
   "keywords": [

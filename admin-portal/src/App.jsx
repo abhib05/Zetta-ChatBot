@@ -1,14 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { RouterProvider, createBrowserRouter, Navigate, Link, useLocation, Outlet, useBlocker, useNavigate } from 'react-router-dom';
+import React from 'react';
+import { RouterProvider, createBrowserRouter, Navigate, Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Users, Tractor, LogOut } from 'lucide-react';
 import Login from './Login';
 import Farms from './Farms';
 import Employees from './Employees';
 import Dashboard from './Dashboard';
-import { PendingChangesProvider } from './context/PendingChangesContext';
-import { usePendingChanges } from './hooks/usePendingChanges';
-import { useIdleTimeout } from './hooks/useIdleTimeout';
-import SaveGateModal from './SaveGateModal';
 
 const PrivateRoute = ({ children }) => {
   const token = localStorage.getItem('adminToken');
@@ -57,83 +53,12 @@ const Sidebar = () => {
 };
 
 const AppLayout = () => {
-  const { isDirty, flushChanges, clearChanges } = usePendingChanges();
-  const [showSaveGate, setShowSaveGate] = useState(false);
-  const [blockedLocation, setBlockedLocation] = useState(null);
-  const navigate = useNavigate();
-
-  // Handle browser tab close/refresh
-  useEffect(() => {
-    const handleBeforeUnload = (e) => {
-      if (isDirty) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isDirty]);
-
-  // Handle idle timeout
-  useIdleTimeout(() => {
-    if (isDirty) {
-      clearChanges();
-      localStorage.removeItem('adminToken');
-      window.location.href = '/login?reason=idle';
-    }
-  });
-
-  // Handle internal navigation blocking
-  let blocker = useBlocker(({ currentLocation, nextLocation }) => {
-    return isDirty && currentLocation.pathname !== nextLocation.pathname;
-  });
-
-  useEffect(() => {
-    if (blocker.state === 'blocked') {
-      setShowSaveGate(true);
-      setBlockedLocation(blocker.location);
-    }
-  }, [blocker.state]);
-
-  const handleSave = async () => {
-    const { success } = await flushChanges();
-    if (success) {
-      setShowSaveGate(false);
-      if (blocker.state === 'blocked') {
-        blocker.proceed();
-      }
-    }
-  };
-
-  const handleDiscard = () => {
-    clearChanges();
-    setShowSaveGate(false);
-    if (blocker.state === 'blocked') {
-      blocker.proceed();
-    }
-  };
-
-  const handleCancel = () => {
-    setShowSaveGate(false);
-    if (blocker.state === 'blocked') {
-      blocker.reset();
-    }
-  };
-
   return (
     <div className="app-container">
-      {isDirty && (
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, background: '#f59e0b', color: '#fff', textAlign: 'center', padding: '0.25rem', zIndex: 50, fontWeight: 'bold' }}>
-          Unsaved changes
-        </div>
-      )}
       <Sidebar />
-      <main className="main-content fade-in" style={{ marginTop: isDirty ? '24px' : '0' }}>
+      <main className="main-content fade-in">
         <Outlet />
       </main>
-      {showSaveGate && (
-        <SaveGateModal onSave={handleSave} onDiscard={handleDiscard} onCancel={handleCancel} />
-      )}
     </div>
   );
 };
@@ -147,9 +72,7 @@ const router = createBrowserRouter([
     path: '/',
     element: (
       <PrivateRoute>
-        <PendingChangesProvider>
-          <AppLayout />
-        </PendingChangesProvider>
+        <AppLayout />
       </PrivateRoute>
     ),
     children: [

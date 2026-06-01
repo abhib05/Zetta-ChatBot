@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, ChevronDown, ChevronRight, Lock, Edit2, Trash2 } from 'lucide-react';
-import { usePendingChanges } from './hooks/usePendingChanges';
+import { Plus, ChevronDown, ChevronRight, Lock, Edit2 } from 'lucide-react';
 
-const API = 'http://localhost:3000/admin';
+const API = '/admin';
 const headers = () => ({
   'Content-Type': 'application/json',
   'Authorization': `Bearer ${localStorage.getItem('adminToken')}`
@@ -24,16 +23,24 @@ export default function Farms() {
   const [newCrop, setNewCrop] = useState({ crop_name: '' });
   const [editForm, setEditForm] = useState({ farm_name: '', total_acres: '' });
 
-  const { addChange } = usePendingChanges();
-
   const fetchFarms = async () => {
     const res = await fetch(`${API}/farms`, { headers: headers() });
-    if (res.ok) setFarms(await res.json());
+    if (res.ok) {
+      setFarms(await res.json());
+    } else if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('adminToken');
+      window.location.href = '/login';
+    }
   };
 
   const fetchCrops = async () => {
     const res = await fetch(`${API}/crops`, { headers: headers() });
-    if (res.ok) setCrops(await res.json());
+    if (res.ok) {
+      setCrops(await res.json());
+    } else if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('adminToken');
+      window.location.href = '/login';
+    }
   };
 
   const fetchPlots = async (farmId) => {
@@ -41,6 +48,9 @@ export default function Farms() {
     if (res.ok) {
       const data = await res.json();
       setPlots(prev => ({ ...prev, [farmId]: data }));
+    } else if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('adminToken');
+      window.location.href = '/login';
     }
   };
 
@@ -55,70 +65,102 @@ export default function Farms() {
     }
   };
 
-  const handleCreateFarm = (e) => {
+  const handleCreateFarm = async (e) => {
     e.preventDefault();
+    setError('');
     const payload = { ...newFarm, total_acres: parseFloat(newFarm.total_acres) || null };
     
-    // Optimistic UI
-    const tempId = 'temp-farm-' + Date.now();
-    setFarms(prev => [{ ...payload, farm_id: tempId }, ...prev]);
-    
-    // Queue change
-    addChange({ type: 'CREATE_FARM', payload });
-    
-    setNewFarm({ farm_code: '', farm_name: '', total_acres: '' });
-    setShowNewFarm(false);
+    try {
+      const res = await fetch(`${API}/farms`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFarms(prev => [{ ...data, employee_id: null, employee_name: null, employee_code: null }, ...prev]);
+        setNewFarm({ farm_code: '', farm_name: '', total_acres: '' });
+        setShowNewFarm(false);
+      } else {
+        setError(data.error || 'Failed to create farm');
+      }
+    } catch (err) {
+      setError('Network error creating farm');
+    }
   };
 
-  const handleUpdateFarm = (farmId) => {
+  const handleUpdateFarm = async (farmId) => {
+    setError('');
     const payload = { farm_name: editForm.farm_name, total_acres: parseFloat(editForm.total_acres) || null };
     
-    // Optimistic UI
-    setFarms(prev => prev.map(f => f.farm_id === farmId ? { ...f, ...payload } : f));
-    
-    // Queue change
-    if (!String(farmId).startsWith('temp-')) {
-       addChange({ type: 'UPDATE_FARM', id: farmId, payload });
+    try {
+      const res = await fetch(`${API}/farms/${farmId}`, {
+        method: 'PUT',
+        headers: headers(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFarms(prev => prev.map(f => f.farm_id === farmId ? { ...f, ...data } : f));
+        setEditFarm(null);
+      } else {
+        setError(data.error || 'Failed to update farm');
+      }
+    } catch (err) {
+      setError('Network error updating farm');
     }
-    
-    setEditFarm(null);
   };
 
-  const handleCreatePlot = (e, farmId) => {
+  const handleCreatePlot = async (e, farmId) => {
     e.preventDefault();
+    setError('');
     const payload = { plot_code: newPlot.plot_code, acres: parseFloat(newPlot.acres) || null };
     
-    // Optimistic UI
-    const tempId = 'temp-plot-' + Date.now();
-    const farmObj = farms.find(f => f.farm_id === farmId);
-    
-    setPlots(prev => ({
-      ...prev,
-      [farmId]: [...(prev[farmId] || []), { ...payload, plot_id: tempId, assigned_employee: farmObj?.employee_name }]
-    }));
-
-    // Queue change
-    if (!String(farmId).startsWith('temp-')) {
-       addChange({ type: 'CREATE_PLOT', farmId, payload });
+    try {
+      const res = await fetch(`${API}/farms/${farmId}/plots`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const farmObj = farms.find(f => f.farm_id === farmId);
+        setPlots(prev => ({
+          ...prev,
+          [farmId]: [...(prev[farmId] || []), { ...data, assigned_employee: farmObj?.employee_name }]
+        }));
+        setNewPlot({ plot_code: '', acres: '' });
+        setShowNewPlot(null);
+      } else {
+        setError(data.error || 'Failed to create plot');
+      }
+    } catch (err) {
+      setError('Network error creating plot');
     }
-    
-    setNewPlot({ plot_code: '', acres: '' });
-    setShowNewPlot(null);
   };
 
-  const handleCreateCrop = (e) => {
+  const handleCreateCrop = async (e) => {
     e.preventDefault();
+    setError('');
     const payload = { crop_name: newCrop.crop_name };
     
-    // Optimistic UI
-    const tempId = 'temp-crop-' + Date.now();
-    setCrops(prev => [...prev, { ...payload, crop_id: tempId }]);
-    
-    // Queue change
-    addChange({ type: 'CREATE_CROP', payload });
-    
-    setNewCrop({ crop_name: '' });
-    setShowNewCrop(false);
+    try {
+      const res = await fetch(`${API}/crops`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCrops(prev => [...prev, data]);
+        setNewCrop({ crop_name: '' });
+        setShowNewCrop(false);
+      } else {
+        setError(data.error || 'Failed to create crop');
+      }
+    } catch (err) {
+      setError('Network error creating crop');
+    }
   };
 
   const startEdit = (farm) => {

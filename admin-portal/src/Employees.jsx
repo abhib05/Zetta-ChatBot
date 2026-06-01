@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, UserPlus, X, Link2 } from 'lucide-react';
-import { usePendingChanges } from './hooks/usePendingChanges';
 
-const API = 'http://localhost:3000/admin';
+const API = '/admin';
 const headers = () => ({
   'Content-Type': 'application/json',
   'Authorization': `Bearer ${localStorage.getItem('adminToken')}`
@@ -12,27 +11,40 @@ export default function Employees() {
   const [employees, setEmployees] = useState([]);
   const [farms, setFarms] = useState([]); // This will hold UNASSIGNED farms
   const [showNewEmployee, setShowNewEmployee] = useState(false);
-  const [newEmployee, setNewEmployee] = useState({ employee_code: '', employee_name: '' });
+  const [newEmployee, setNewEmployee] = useState({ employee_code: '', employee_name: '', phone_number: '' });
   const [error, setError] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [assignedFarms, setAssignedFarms] = useState([]);
   const [assignFarmId, setAssignFarmId] = useState('');
-  
-  const { addChange } = usePendingChanges();
 
   const fetchEmployees = async () => {
     const res = await fetch(`${API}/employees`, { headers: headers() });
-    if (res.ok) setEmployees(await res.json());
+    if (res.ok) {
+      setEmployees(await res.json());
+    } else if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('adminToken');
+      window.location.href = '/login';
+    }
   };
 
   const fetchUnassignedFarms = async () => {
     const res = await fetch(`${API}/farms/unassigned`, { headers: headers() });
-    if (res.ok) setFarms(await res.json());
+    if (res.ok) {
+      setFarms(await res.json());
+    } else if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('adminToken');
+      window.location.href = '/login';
+    }
   };
 
   const fetchAssignedFarms = async (empId) => {
     const res = await fetch(`${API}/employees/${empId}/farms`, { headers: headers() });
-    if (res.ok) setAssignedFarms(await res.json());
+    if (res.ok) {
+      setAssignedFarms(await res.json());
+    } else if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('adminToken');
+      window.location.href = '/login';
+    }
   };
 
   useEffect(() => { 
@@ -40,20 +52,28 @@ export default function Employees() {
     fetchUnassignedFarms(); 
   }, []);
 
-  const handleCreateEmployee = (e) => {
+  const handleCreateEmployee = async (e) => {
     e.preventDefault();
-    if (!newEmployee.employee_code || !newEmployee.employee_name) return;
-    
-    // Optimistic UI
-    const tempId = 'temp-' + Date.now();
-    const newEmp = { ...newEmployee, employee_id: tempId, active: true };
-    setEmployees(prev => [...prev, newEmp]);
-    
-    // Queue change
-    addChange({ type: 'CREATE_EMPLOYEE', payload: newEmployee });
-    
-    setNewEmployee({ employee_code: '', employee_name: '' });
-    setShowNewEmployee(false);
+    if (!newEmployee.employee_code || !newEmployee.employee_name || !newEmployee.phone_number) return;
+    setError('');
+
+    try {
+      const res = await fetch(`${API}/employees`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(newEmployee)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setEmployees(prev => [...prev, data]);
+        setNewEmployee({ employee_code: '', employee_name: '', phone_number: '' });
+        setShowNewEmployee(false);
+      } else {
+        setError(data.error || 'Failed to create employee');
+      }
+    } catch (err) {
+      setError('Network error creating employee');
+    }
   };
 
   const selectEmployee = (emp) => {
@@ -62,51 +82,77 @@ export default function Employees() {
     setAssignFarmId('');
   };
 
-  const handleAssignFarm = () => {
+  const handleAssignFarm = async () => {
     if (!assignFarmId || !selectedEmployee) return;
+    setError('');
     
     const farmToAssign = farms.find(f => f.farm_id === assignFarmId);
     if (!farmToAssign) return;
 
-    // Optimistic UI
-    const tempMembershipId = 'temp-mem-' + Date.now();
-    setAssignedFarms(prev => [...prev, {
-      id: tempMembershipId,
-      role: 'Member',
-      farms: { farm_id: farmToAssign.farm_id, farm_code: farmToAssign.farm_code, farm_name: farmToAssign.farm_name }
-    }]);
-    setFarms(prev => prev.filter(f => f.farm_id !== assignFarmId));
-    setAssignFarmId('');
-
-    // Queue change
-    addChange({ type: 'ASSIGN_FARM', employee_id: selectedEmployee.employee_id, farm_id: farmToAssign.farm_id });
-  };
-
-  const handleUnassignFarm = (membershipId, farmObj) => {
-    // Optimistic UI
-    setAssignedFarms(prev => prev.filter(af => af.id !== membershipId));
-    setFarms(prev => [...prev, { farm_id: farmObj.farm_id, farm_code: farmObj.farm_code, farm_name: farmObj.farm_name }]);
-
-    // Queue change
-    // Only queue DELETE if it's a real ID from the DB
-    if (!String(membershipId).startsWith('temp-')) {
-      addChange({ type: 'DELETE_MEMBERSHIP', id: membershipId });
+    try {
+      const res = await fetch(`${API}/farm-memberships`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ employee_id: selectedEmployee.employee_id, farm_id: farmToAssign.farm_id })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAssignedFarms(prev => [...prev, {
+          id: data.id,
+          role: data.role || 'Member',
+          farms: { farm_id: farmToAssign.farm_id, farm_code: farmToAssign.farm_code, farm_name: farmToAssign.farm_name }
+        }]);
+        setFarms(prev => prev.filter(f => f.farm_id !== assignFarmId));
+        setAssignFarmId('');
+      } else {
+        setError(data.error || 'Failed to assign farm');
+      }
+    } catch (err) {
+      setError('Network error assigning farm');
     }
   };
 
-  const handleDeactivateEmployee = (emp) => {
-    // Optimistic UI
-    setEmployees(prev => prev.map(e => e.employee_id === emp.employee_id ? { ...e, active: false } : e));
-    
-    if (selectedEmployee?.employee_id === emp.employee_id) {
-       // All assigned farms become unassigned
-       setFarms(prev => [...prev, ...assignedFarms.map(af => af.farms)]);
-       setAssignedFarms([]);
+  const handleUnassignFarm = async (membershipId, farmObj) => {
+    setError('');
+    try {
+      const res = await fetch(`${API}/farm-memberships/${membershipId}`, {
+        method: 'DELETE',
+        headers: headers()
+      });
+      if (res.ok) {
+        setAssignedFarms(prev => prev.filter(af => af.id !== membershipId));
+        setFarms(prev => [...prev, { farm_id: farmObj.farm_id, farm_code: farmObj.farm_code, farm_name: farmObj.farm_name }]);
+      } else {
+        const data = await res.json();
+        setError(data.error || 'Failed to unassign farm');
+      }
+    } catch (err) {
+      setError('Network error unassigning farm');
     }
+  };
 
-    // Queue change
-    if (!String(emp.employee_id).startsWith('temp-')) {
-       addChange({ type: 'DEACTIVATE_EMPLOYEE', id: emp.employee_id });
+  const handleDeactivateEmployee = async (emp) => {
+    setError('');
+    try {
+      const res = await fetch(`${API}/employees/${emp.employee_id}`, {
+        method: 'PUT',
+        headers: headers(),
+        body: JSON.stringify({ active: false, employee_name: emp.employee_name, employee_code: emp.employee_code, phone_number: emp.phone_number })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setEmployees(prev => prev.map(e => e.employee_id === emp.employee_id ? { ...e, active: false } : e));
+        
+        if (selectedEmployee?.employee_id === emp.employee_id) {
+           // All assigned farms become unassigned
+           setFarms(prev => [...prev, ...assignedFarms.map(af => af.farms)]);
+           setAssignedFarms([]);
+        }
+      } else {
+        setError(data.error || 'Failed to deactivate employee');
+      }
+    } catch (err) {
+      setError('Network error deactivating employee');
     }
   };
 
@@ -129,14 +175,18 @@ export default function Employees() {
         <div className="glass-panel fade-in" style={{ marginBottom: '1.5rem' }}>
           <h3>Create New Employee</h3>
           <form onSubmit={handleCreateEmployee}>
-            <div className="grid-2">
-              <div className="form-group">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
                 <label>Employee Code</label>
                 <input value={newEmployee.employee_code} onChange={e => setNewEmployee({ ...newEmployee, employee_code: e.target.value })} placeholder="e.g. emp 004" required />
               </div>
-              <div className="form-group">
+              <div className="form-group" style={{ marginBottom: 0 }}>
                 <label>Employee Name</label>
                 <input value={newEmployee.employee_name} onChange={e => setNewEmployee({ ...newEmployee, employee_name: e.target.value })} placeholder="e.g. Rajesh Patil" required />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Phone Number (WhatsApp, e.g. 919999999901)</label>
+                <input value={newEmployee.phone_number} onChange={e => setNewEmployee({ ...newEmployee, phone_number: e.target.value })} placeholder="e.g. 919999999901" required />
               </div>
             </div>
             <button type="submit" className="btn btn-primary">Create Employee</button>
@@ -153,6 +203,7 @@ export default function Employees() {
                 <tr>
                   <th>Code</th>
                   <th>Name</th>
+                  <th>Phone Number</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
@@ -169,6 +220,7 @@ export default function Employees() {
                   >
                     <td style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}>{emp.employee_code}</td>
                     <td>{emp.employee_name}</td>
+                    <td>{emp.phone_number || <span style={{ color: 'var(--text-secondary)' }}>- None</span>}</td>
                     <td>
                       {emp.active ? (
                         <span className="badge badge-success">Active</span>

@@ -48,12 +48,24 @@ async function submitToDB(from, session) {
     const numFields = ['acres', 'expense_amount', 'quantity', 'fuel_used_litres', 'input_qty', 'seed_rate_per_acre'];
 
     intFields.forEach(f => {
-      if (act[f] !== undefined) act[f] = parseInt(act[f]) || null;
-      if (act.details && act.details[f] !== undefined) act.details[f] = parseInt(act.details[f]) || null;
+      if (act[f] !== undefined && act[f] !== null) {
+        const val = parseInt(act[f]);
+        act[f] = isNaN(val) ? null : val;
+      }
+      if (act.details && act.details[f] !== undefined && act.details[f] !== null) {
+        const val = parseInt(act.details[f]);
+        act.details[f] = isNaN(val) ? null : val;
+      }
     });
     numFields.forEach(f => {
-      if (act[f] !== undefined) act[f] = parseFloat(act[f]) || null;
-      if (act.details && act.details[f] !== undefined) act.details[f] = parseFloat(act.details[f]) || null;
+      if (act[f] !== undefined && act[f] !== null) {
+        const val = parseFloat(act[f]);
+        act[f] = isNaN(val) ? null : val;
+      }
+      if (act.details && act.details[f] !== undefined && act.details[f] !== null) {
+        const val = parseFloat(act.details[f]);
+        act.details[f] = isNaN(val) ? null : val;
+      }
     });
 
     // 5. Defensively enforce ENUM fields

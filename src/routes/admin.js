@@ -2,16 +2,42 @@ const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
 const config = require('../config');
+const localSeedStore = require('../services/localSeedStore');
 
 const router = express.Router();
+
+const SUPABASE_TIMEOUT_MS = parseInt(process.env.SUPABASE_TIMEOUT_MS, 10) || 5000;
+const USE_LOCAL_SEED_FALLBACK = config.nodeEnv !== 'production';
+
+const fetchWithTimeout = (url, options = {}) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SUPABASE_TIMEOUT_MS);
+
+  return fetch(url, {
+    ...options,
+    signal: options.signal || controller.signal,
+  }).finally(() => clearTimeout(timeout));
+};
 
 const supabase = createClient(config.supabase.url, config.supabase.serviceKey, {
   auth: { persistSession: false },
   db: { schema: 'public' },
+  global: { fetch: fetchWithTimeout },
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'zetta-super-secret-key-for-admin-panel';
 const authAttempts = new Map(); // Track failed attempts per user token
+
+const shouldUseSeedFallback = (data, error) => {
+  if (!USE_LOCAL_SEED_FALLBACK) return false;
+  if (error) return true;
+  return Array.isArray(data) && data.length === 0;
+};
+
+const logSeedFallback = (resource, error) => {
+  const reason = error?.message ? `: ${error.message}` : '';
+  console.warn(`Using local seed data for ${resource}${reason}`);
+};
 
 // Middleware for JWT Auth
 const adminAuth = (req, res, next) => {
@@ -81,6 +107,10 @@ router.get('/farms', async (req, res) => {
       employees ( employee_id, employee_name, employee_code )
     )
   `).order('created_at', { ascending: false });
+  if (shouldUseSeedFallback(data, error)) {
+    logSeedFallback('farms', error);
+    return res.json(localSeedStore.getFarms());
+  }
   if (error) return res.status(500).json({ error: error.message });
   
   // Flatten employee info
@@ -104,6 +134,10 @@ router.get('/farms/unassigned', async (req, res) => {
     farm_memberships (id)
   `).eq('active', true).order('farm_name');
   
+  if (shouldUseSeedFallback(data, error)) {
+    logSeedFallback('unassigned farms', error);
+    return res.json(localSeedStore.getUnassignedFarms());
+  }
   if (error) return res.status(500).json({ error: error.message });
   
   const unassignedFarms = data.filter(farm => !farm.farm_memberships || farm.farm_memberships.length === 0);
@@ -137,6 +171,10 @@ router.get('/farms/:farmId/plots', async (req, res) => {
     crops (crop_name)
   `).eq('farm_id', farmId);
   
+  if (shouldUseSeedFallback(plotsData, plotsError)) {
+    logSeedFallback(`plots for farm ${farmId}`, plotsError);
+    return res.json(localSeedStore.getPlots(farmId));
+  }
   if (plotsError) return res.status(500).json({ error: plotsError.message });
   
   // Then fetch the farm membership to get the assigned employee
@@ -193,6 +231,10 @@ router.put('/plots/:id', async (req, res) => {
 // -------------------------------------------------------------
 router.get('/crops', async (req, res) => {
   const { data, error } = await supabase.from('crops').select('*').order('crop_name');
+  if (shouldUseSeedFallback(data, error)) {
+    logSeedFallback('crops', error);
+    return res.json(localSeedStore.getCrops());
+  }
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -209,21 +251,25 @@ router.post('/crops', async (req, res) => {
 // -------------------------------------------------------------
 router.get('/employees', async (req, res) => {
   const { data, error } = await supabase.from('employees').select('*').order('employee_name');
+  if (shouldUseSeedFallback(data, error)) {
+    logSeedFallback('employees', error);
+    return res.json(localSeedStore.getEmployees());
+  }
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
 router.post('/employees', async (req, res) => {
-  const { employee_code, employee_name } = req.body;
-  const { data, error } = await supabase.from('employees').insert({ employee_code, employee_name }).select().single();
+  const { employee_code, employee_name, phone_number } = req.body;
+  const { data, error } = await supabase.from('employees').insert({ employee_code, employee_name, phone_number }).select().single();
   if (error) return res.status(400).json({ error: error.message });
   res.status(201).json(data);
 });
 
 router.put('/employees/:id', async (req, res) => {
   const { id } = req.params;
-  const { employee_code, employee_name, active } = req.body;
-  const { data, error } = await supabase.from('employees').update({ employee_code, employee_name, active }).eq('employee_id', id).select().single();
+  const { employee_code, employee_name, phone_number, active } = req.body;
+  const { data, error } = await supabase.from('employees').update({ employee_code, employee_name, phone_number, active }).eq('employee_id', id).select().single();
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);
 });
@@ -238,6 +284,10 @@ router.get('/employees/:id/farms', async (req, res) => {
     role,
     farms ( farm_id, farm_code, farm_name )
   `).eq('employee_id', id);
+  if (shouldUseSeedFallback(data, error)) {
+    logSeedFallback(`farm memberships for employee ${id}`, error);
+    return res.json(localSeedStore.getEmployeeFarms(id));
+  }
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -257,43 +307,47 @@ router.delete('/farm-memberships/:id', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// HARVEST REQUESTS
+// REPORTS
 // -------------------------------------------------------------
-router.get('/harvest-requests', async (req, res) => {
-  const { data, error } = await supabase.from('harvest_requests').select(`
-    *,
-    farm_plots ( plot_code, farms (farm_name) ),
-    crops ( crop_name )
-  `).eq('status', 'PENDING').order('requested_at', { ascending: false });
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
+router.get('/reports', async (req, res) => {
+  const { data, error } = await supabase.from('dts_submissions').select(`
+    submission_id,
+    farm_id,
+    farm_name_snapshot,
+    farm_code_snapshot,
+    report_date,
+    submitted_at,
+    deviation_notes,
+    next_day_plans,
+    agronomy_report,
+    employees:filled_by_employee_id (
+      employee_id,
+      employee_name,
+      employee_code
+    ),
+    dts_activity_entries (
+      entry_id,
+      acres,
+      labour_count,
+      duration_minutes,
+      expense_amount,
+      remarks,
+      activity_types (
+        name
+      ),
+      farm_plots (
+        plot_code
+      ),
+      crops (
+        crop_name
+      )
+    )
+  `).order('submitted_at', { ascending: false });
 
-router.post('/harvest-requests/:id/approve', async (req, res) => {
-  const { id } = req.params;
-  
-  // 1. Get the request
-  const { data: request, error: reqErr } = await supabase.from('harvest_requests').select('*').eq('request_id', id).single();
-  if (reqErr || !request) return res.status(404).json({ error: 'Request not found' });
-  
-  if (request.status !== 'PENDING') {
-    return res.status(400).json({ error: 'Request is already processed' });
+  if (shouldUseSeedFallback(data, error)) {
+    logSeedFallback('reports', error);
+    return res.json([]);
   }
-
-  // 2. Clear plot's current crop
-  const { error: plotErr } = await supabase.from('farm_plots').update({ current_crop_id: null }).eq('plot_id', request.plot_id);
-  if (plotErr) return res.status(500).json({ error: plotErr.message });
-
-  // 3. Mark request as APPROVED
-  const { data, error: updErr } = await supabase.from('harvest_requests').update({ status: 'APPROVED' }).eq('request_id', id).select().single();
-  if (updErr) return res.status(500).json({ error: updErr.message });
-
-  res.json(data);
-});
-
-router.post('/harvest-requests/:id/reject', async (req, res) => {
-  const { id } = req.params;
-  const { data, error } = await supabase.from('harvest_requests').update({ status: 'REJECTED' }).eq('request_id', id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
