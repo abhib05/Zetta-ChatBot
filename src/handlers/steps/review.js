@@ -39,7 +39,7 @@ async function handleFinalReview(from, msg, session) {
 
         if (session.parsedJSON.activities.length === 0) {
           await sessionService.deleteSession(from);
-          return whatsappService.sendMessage(from, `No remaining unique activities to submit. Session discarded. Send your Employee Code to start a new report.`);
+          return whatsappService.sendMessage(from, `No remaining unique activities to submit. Session discarded. Send any message to start a new report.`);
         }
       }
     }
@@ -141,12 +141,12 @@ async function handlePendingAuthorization(from, msg, session) {
       await submitToDB(from, session);
     } else {
       await sessionService.deleteSession(from);
-      await whatsappService.sendMessage(from, `No activities were recorded to save. Session discarded. Please send your Employee Code to start a new report.`);
+      await whatsappService.sendMessage(from, `No activities were recorded to save. Session discarded. Send any message to start a new report.`);
     }
   } else {
     // Discard
     await sessionService.deleteSession(from);
-    await whatsappService.sendMessage(from, `Session discarded. Please send your Employee Code to start a new report.`);
+    await whatsappService.sendMessage(from, `Session discarded. Send any message to start a new report.`);
   }
 }
 

@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, ChevronDown, ChevronRight, Lock, Edit2 } from 'lucide-react';
+/* eslint-disable react-hooks/set-state-in-effect */
+/* eslint-disable react-hooks/immutability */
+import { useState, useEffect } from 'react';
+import { Plus, ChevronDown, ChevronRight, Lock, Edit2, User, FileText } from 'lucide-react';
 
 const API = '/admin';
 const headers = () => ({
@@ -12,6 +14,8 @@ export default function Farms() {
   const [crops, setCrops] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const [plots, setPlots] = useState({});
+  const [reports, setReports] = useState([]);
+  const [expandedReport, setExpandedReport] = useState(null);
   const [showNewFarm, setShowNewFarm] = useState(false);
   const [showNewPlot, setShowNewPlot] = useState(null);
   const [showNewCrop, setShowNewCrop] = useState(false);
@@ -54,7 +58,17 @@ export default function Farms() {
     }
   };
 
-  useEffect(() => { fetchFarms(); fetchCrops(); }, []);
+  const fetchReports = async () => {
+    const res = await fetch(`${API}/reports`, { headers: headers() });
+    if (res.ok) {
+      setReports(await res.json());
+    } else if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('adminToken');
+      window.location.href = '/login';
+    }
+  };
+
+  useEffect(() => { fetchFarms(); fetchCrops(); fetchReports(); }, []);
 
   const toggleFarm = (farmId) => {
     if (expanded === farmId) {
@@ -84,7 +98,7 @@ export default function Farms() {
       } else {
         setError(data.error || 'Failed to create farm');
       }
-    } catch (err) {
+    } catch {
       setError('Network error creating farm');
     }
   };
@@ -106,7 +120,7 @@ export default function Farms() {
       } else {
         setError(data.error || 'Failed to update farm');
       }
-    } catch (err) {
+    } catch {
       setError('Network error updating farm');
     }
   };
@@ -134,7 +148,7 @@ export default function Farms() {
       } else {
         setError(data.error || 'Failed to create plot');
       }
-    } catch (err) {
+    } catch {
       setError('Network error creating plot');
     }
   };
@@ -158,7 +172,7 @@ export default function Farms() {
       } else {
         setError(data.error || 'Failed to create crop');
       }
-    } catch (err) {
+    } catch {
       setError('Network error creating crop');
     }
   };
@@ -290,7 +304,7 @@ export default function Farms() {
                   </form>
                 )}
 
-                {plots[farm.farm_id] && plots[farm.farm_id].length > 0 ? (
+                 {plots[farm.farm_id] && plots[farm.farm_id].length > 0 ? (
                   <div className="table-container">
                     <table>
                       <thead>
@@ -330,6 +344,111 @@ export default function Farms() {
                     No plots yet. Add one above.
                   </p>
                 )}
+
+                {/* Submitted Reports Section */}
+                <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
+                  <h3 style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
+                    <FileText size={20} />
+                    Submitted Reports
+                  </h3>
+                  {reports.filter(r => r.farm_id === farm.farm_id).length === 0 ? (
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No reports submitted for this farm yet.</p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {reports.filter(r => r.farm_id === farm.farm_id).map(report => {
+                        const isExpanded = expandedReport === report.submission_id;
+                        const formattedDate = new Date(report.report_date).toLocaleDateString(undefined, {
+                          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+                        });
+                        const submissionTime = new Date(report.submitted_at).toLocaleTimeString();
+                        const employeeName = report.employees?.employee_name || 'System / Unassigned';
+                        const employeeCode = report.employees?.employee_code || '-';
+
+                        return (
+                          <div key={report.submission_id} style={{ padding: '1rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--panel-inner-bg)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setExpandedReport(isExpanded ? null : report.submission_id)}>
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                  <span style={{ fontWeight: 'bold', fontSize: '1rem' }}>{formattedDate}</span>
+                                  <span className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.75rem' }}>
+                                    <User size={10} /> {employeeName} ({employeeCode})
+                                  </span>
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                                  Submitted: {submissionTime}
+                                </div>
+                              </div>
+                              <div>
+                                {isExpanded ? <ChevronDown size={16} style={{ transform: 'rotate(180deg)', transition: 'transform 0.2s' }} /> : <ChevronDown size={16} style={{ transition: 'transform 0.2s' }} />}
+                              </div>
+                            </div>
+
+                            {isExpanded && (
+                              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                <div className="grid-3" style={{ gap: '0.75rem' }}>
+                                  <div style={{ padding: '0.5rem', background: 'rgba(0,0,0,0.02)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                    <strong style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Deviation Notes</strong>
+                                    <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem' }}>{report.deviation_notes || 'None reported'}</p>
+                                  </div>
+                                  <div style={{ padding: '0.5rem', background: 'rgba(0,0,0,0.02)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                    <strong style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Next Day Plans</strong>
+                                    <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem' }}>{report.next_day_plans || 'None reported'}</p>
+                                  </div>
+                                  <div style={{ padding: '0.5rem', background: 'rgba(0,0,0,0.02)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                    <strong style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Agronomy Report</strong>
+                                    <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem' }}>{report.agronomy_report || 'None reported'}</p>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem' }}>Logged Activities</h4>
+                                  {report.dts_activity_entries && report.dts_activity_entries.length > 0 ? (
+                                    <div className="table-container">
+                                      <table style={{ minWidth: '100%', fontSize: '0.85rem' }}>
+                                        <thead>
+                                          <tr>
+                                            <th>Activity</th>
+                                            <th>Plot</th>
+                                            <th>Crop</th>
+                                            <th>Acres</th>
+                                            <th>Labour Count</th>
+                                            <th>Duration</th>
+                                            <th>Expense</th>
+                                            <th>Remarks</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {report.dts_activity_entries.map(act => (
+                                            <tr key={act.entry_id}>
+                                              <td>
+                                                <span className="badge badge-success" style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem' }}>
+                                                  {act.activity_types?.name?.replace(/_/g, ' ')}
+                                                </span>
+                                              </td>
+                                              <td>{act.farm_plots?.plot_code || '-'}</td>
+                                              <td>{act.crops?.crop_name || '-'}</td>
+                                              <td>{act.acres != null ? `${act.acres} ac` : '-'}</td>
+                                              <td>{act.labour_count != null ? act.labour_count : '-'}</td>
+                                              <td>{act.duration_minutes != null ? `${act.duration_minutes} min` : '-'}</td>
+                                              <td>{act.expense_amount != null ? `₹${act.expense_amount}` : '-'}</td>
+                                              <td><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{act.remarks || '-'}</span></td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  ) : (
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No activities logged in this report.</p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>

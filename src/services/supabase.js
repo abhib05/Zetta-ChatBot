@@ -272,6 +272,10 @@ async function deleteActivityEntry(entryId) {
  * Returns employee info and their assigned farm or null.
  */
 async function findEmployeeByPhone(phoneNumber) {
+  const cleanPhone = phoneNumber.replace(/[^\d]/g, '');
+  if (cleanPhone.length < 10) return null;
+  const last10 = cleanPhone.slice(-10);
+
   const { data: employee, error } = await supabase
     .from('employees')
     .select(`
@@ -287,23 +291,29 @@ async function findEmployeeByPhone(phoneNumber) {
         )
       )
     `)
-    .eq('phone_number', phoneNumber.trim())
+    .or(`phone_number.eq.${cleanPhone},phone_number.eq.+${cleanPhone},phone_number.like.%${last10}`)
     .eq('active', true)
     .maybeSingle();
 
   if (error || !employee) return null;
 
-  const farmMembership = employee.farm_memberships && employee.farm_memberships.length > 0 ? employee.farm_memberships[0] : null;
-  const farm = farmMembership?.farms || null;
+  const farms = employee.farm_memberships
+    ? employee.farm_memberships.map(m => m.farms).filter(Boolean)
+    : [];
 
   return {
     employee_id: employee.employee_id,
     employee_name: employee.employee_name,
     employee_code: employee.employee_code,
-    farm: farm ? {
+    farms: farms.map(farm => ({
       farm_id: farm.farm_id,
       farm_code: farm.farm_code,
       farm_name: farm.farm_name
+    })),
+    farm: farms.length > 0 ? {
+      farm_id: farms[0].farm_id,
+      farm_code: farms[0].farm_code,
+      farm_name: farms[0].farm_name
     } : null
   };
 }

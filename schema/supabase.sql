@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS employees (
   employee_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   employee_code TEXT UNIQUE NOT NULL,
   employee_name TEXT NOT NULL,
-  phone_number TEXT UNIQUE,
+  phone_number TEXT,
   active BOOLEAN NOT NULL DEFAULT TRUE
 );
 

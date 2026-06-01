@@ -272,3 +272,16 @@ tbody tr:hover {
   grid-template-columns: 1fr 1fr;
   gap: 24px;
 }
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 24px;
+}
+
+@media (max-width: 768px) {
+  .grid-2, .grid-3 {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}

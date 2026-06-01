@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+/* eslint-disable react-hooks/set-state-in-effect */
+import { useState, useEffect } from 'react';
 import { FileText, Calendar, User, ChevronDown, ChevronUp } from 'lucide-react';
 
 const API = '/admin';
@@ -8,6 +9,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expandedReport, setExpandedReport] = useState(null);
+  const [selectedDate, setSelectedDate] = useState('');
 
   const fetchReports = async () => {
     try {
@@ -24,7 +26,7 @@ export default function Dashboard() {
         }
         setError(data.error);
       }
-    } catch (err) {
+    } catch {
       setError('Failed to load submitted reports');
     } finally {
       setLoading(false);
@@ -39,6 +41,10 @@ export default function Dashboard() {
     setExpandedReport(prev => prev === id ? null : id);
   };
 
+  const filteredReports = selectedDate
+    ? reports.filter(report => report.report_date === selectedDate)
+    : [];
+
   return (
     <div>
       <h1 style={{ marginBottom: '2rem' }}>Overview & Reports</h1>
@@ -52,17 +58,44 @@ export default function Dashboard() {
           Real-time view of reports submitted by farmers via WhatsApp.
         </p>
 
+        <div style={{ marginBottom: '2rem', padding: '1rem', background: 'var(--panel-inner-bg)', borderRadius: '8px', border: '1px solid var(--border)', display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="form-group" style={{ marginBottom: 0, width: '250px' }}>
+            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+              Filter by Date
+            </label>
+            <input 
+              type="date" 
+              value={selectedDate} 
+              onChange={e => setSelectedDate(e.target.value)} 
+              style={{ padding: '0.5rem 0.75rem', height: '42px', border: '1px solid var(--border)', borderRadius: '6px' }}
+            />
+          </div>
+          {selectedDate && (
+            <button 
+              className="btn btn-outline" 
+              onClick={() => setSelectedDate('')} 
+              style={{ height: '42px', padding: '0 1rem' }}
+            >
+              Clear Filter
+            </button>
+          )}
+        </div>
+
         {loading ? (
           <p>Loading...</p>
         ) : error ? (
           <p style={{ color: 'var(--danger)' }}>{error}</p>
-        ) : reports.length === 0 ? (
+        ) : !selectedDate ? (
           <div style={{ padding: '2rem', textAlign: 'center', background: 'var(--panel-inner-bg)', borderRadius: '8px' }}>
-            <p style={{ color: 'var(--text-secondary)' }}>No reports submitted yet.</p>
+            <p style={{ color: 'var(--text-secondary)' }}>Please select a date to view reports.</p>
+          </div>
+        ) : filteredReports.length === 0 ? (
+          <div style={{ padding: '2rem', textAlign: 'center', background: 'var(--panel-inner-bg)', borderRadius: '8px' }}>
+            <p style={{ color: 'var(--text-secondary)' }}>No reports submitted for this date.</p>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {reports.map(report => {
+            {filteredReports.map(report => {
               const isExpanded = expandedReport === report.submission_id;
               const formattedDate = new Date(report.report_date).toLocaleDateString(undefined, {
                 weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
