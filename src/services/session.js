@@ -74,35 +74,33 @@ async function deleteSession(phoneNumber) {
 async function createSession(phoneNumber) {
   const session = {
     phoneNumber,
-    state: 'AWAITING_FARM_CODE',
     farmId: null,
     farmCode: null,
     farmName: null,
     
-    // Cached DB reference tables for fuzzy matching without DB hits
-    dbCache: { plots: [], allCrops: [], machines: [], employees: [] },
+    // Enriched metadata
+    dbCache: { plots: [], allCrops: [], machines: [], employees: [], submittedToday: [] },
     
-    // Onboarding tracking
-    onboardingPlots: [],
+    // Queue for Multi-Farm Reporting
+    pendingFarmsQueue: [],
     
-    // Activity tracking (Step 3 & 4)
-    selectedActivities: [],
-    currentActivityIndex: 0,
+    // LLM Orchestration State
+    conversationPhase: 'COLLECTING', // 'COLLECTING' | 'REVIEW' | 'CONFIRMED'
+    pendingTimeoutChoice: false,
     
-    // Collected raw unstructured text from user per activity
-    collectedRaw: {}, // e.g. { land_preparation: "Ploughed using tractor for 2 hours..." }
+    // Draft DTS
+    draft_dts_state: [],
+    draft_meta: {
+      deviation_notes: null,
+      next_day_plans: null,
+      agronomy_report: null
+    },
     
-    // Missing Fields tracking (Rule-based missing queue)
-    parsedJSON: null,       // Output from LLM
-    missingFieldsQueue: [], // Array of missing questions e.g. [{ activity: 'weeding', field: 'labour_count' }]
-    
-    // Final review
-    deviationNotes: null,
-    nextDayPlans: null,
-    agronomyReport: null,
-    filledBy: null,
+    // Confirmed DTS
+    confirmed_dts_state: null,
 
     createdAt: new Date().toISOString(),
+    lastActivity: new Date().toISOString(),
   };
 
   await setSession(phoneNumber, session);

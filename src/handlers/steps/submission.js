@@ -1,7 +1,6 @@
 const sessionService = require('../../services/session');
 const whatsappService = require('../../services/whatsapp');
 const supabaseService = require('../../services/supabase');
-const { ACTIVITY_TYPES } = require('./constants');
 
 async function submitToDB(from, session) {
   // Defensive: Ensure activities array exists
