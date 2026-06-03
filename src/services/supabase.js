@@ -139,7 +139,8 @@ async function getFarmDetails(farmId) {
     allCrops: allCrops || [],
     machines: machines || [],
     employees: employees || [],
-    submittedToday
+    submittedToday,
+    submission_id: submission ? submission.submission_id : null
   };
 }
 
@@ -266,6 +267,134 @@ async function deleteActivityEntry(entryId) {
   }
   return true;
 }
+<<<<<<< HEAD
+
+/**
+ * Retrieve and format an existing DTS submission for user review.
+ */
+async function getDTSSubmissionSummary(submissionId) {
+  const { data: submission, error } = await supabase
+    .from('dts_submissions')
+    .select(`
+      report_date,
+      farm_name_snapshot,
+      deviation_notes,
+      dts_activity_entries (
+        activity_types (name, label),
+        farm_plots (plot_code),
+        crops (crop_name),
+        acres,
+        labour_count,
+        duration_minutes
+      )
+    `)
+    .eq('submission_id', submissionId)
+    .maybeSingle();
+
+  if (error || !submission) {
+    return "Error: Could not retrieve the previous report.";
+  }
+
+  let summary = `📝 *PREVIOUS SUBMITTED REPORT*\n`;
+  summary += `----------------------------------------\n`;
+  summary += `🌾 *Farm:* ${submission.farm_name_snapshot || 'N/A'}\n`;
+  summary += `📅 *Date:* ${submission.report_date}\n`;
+  summary += `----------------------------------------\n\n`;
+
+  const activities = submission.dts_activity_entries || [];
+  if (activities.length === 0) {
+    summary += `*Activities:* None.\n`;
+  } else {
+    summary += `*Logged Activities (${activities.length}):*\n`;
+    activities.forEach((act, idx) => {
+      const typeLabel = act.activity_types?.label || act.activity_types?.name?.replace(/_/g, ' ').toUpperCase() || 'ACTIVITY';
+      const plotName = act.farm_plots?.plot_code || '-';
+      const cropName = act.crops?.crop_name || '-';
+      summary += `\n*${idx + 1}. ${typeLabel}*\n`;
+      summary += `  • Plot: ${plotName}\n`;
+      summary += `  • Crop: ${cropName}\n`;
+      if (act.acres != null) summary += `  • Acres: ${act.acres} ac\n`;
+      if (act.labour_count != null) summary += `  • Labour: ${act.labour_count}\n`;
+      if (act.duration_minutes != null) summary += `  • Duration: ${act.duration_minutes} min\n`;
+    });
+  }
+
+  if (submission.deviation_notes) {
+    summary += `\n----------------------------------------\n`;
+    summary += `*Notes:* ${submission.deviation_notes}\n`;
+  }
+  
+  return summary;
+}
+
+/**
+ * Delete an entire DTS submission and cascade to its entries.
+ */
+async function deleteDTSSubmission(submissionId) {
+  const { error } = await supabase
+    .from('dts_submissions')
+    .delete()
+    .eq('submission_id', submissionId);
+    
+  if (error) {
+    console.error('Error deleting submission:', error);
+    throw error;
+  }
+  return true;
+}
+
+/**
+ * Find active employee by their WhatsApp phone number.
+ * Returns employee info and their assigned farm or null.
+ */
+async function findEmployeeByPhone(phoneNumber) {
+  const cleanPhone = phoneNumber.replace(/[^\d]/g, '');
+  if (cleanPhone.length < 10) return null;
+  const last10 = cleanPhone.slice(-10);
+
+  const { data: employee, error } = await supabase
+    .from('employees')
+    .select(`
+      employee_id,
+      employee_name,
+      employee_code,
+      active,
+      farm_memberships (
+        farms (
+          farm_id,
+          farm_code,
+          farm_name
+        )
+      )
+    `)
+    .or(`phone_number.eq.${cleanPhone},phone_number.eq.+${cleanPhone},phone_number.like.%${last10}`)
+    .eq('active', true)
+    .maybeSingle();
+
+  if (error || !employee) return null;
+
+  const farms = employee.farm_memberships
+    ? employee.farm_memberships.map(m => m.farms).filter(Boolean)
+    : [];
+
+  return {
+    employee_id: employee.employee_id,
+    employee_name: employee.employee_name,
+    employee_code: employee.employee_code,
+    farms: farms.map(farm => ({
+      farm_id: farm.farm_id,
+      farm_code: farm.farm_code,
+      farm_name: farm.farm_name
+    })),
+    farm: farms.length > 0 ? {
+      farm_id: farms[0].farm_id,
+      farm_code: farms[0].farm_code,
+      farm_name: farms[0].farm_name
+    } : null
+  };
+}
+
+
 module.exports = { 
   validateEmployeeCode,
   validateEmployeeFarmAccess,
@@ -275,5 +404,8 @@ module.exports = {
   saveDTSSubmission, 
   checkDuplicateSubmission,
   checkDuplicateActivities,
-  deleteActivityEntry
+  deleteActivityEntry,
+  getDTSSubmissionSummary,
+  deleteDTSSubmission,
+  findEmployeeByPhone
 };

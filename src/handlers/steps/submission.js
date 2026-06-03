@@ -1,7 +1,4 @@
-const sessionService = require('../../services/session');
-const whatsappService = require('../../services/whatsapp');
 const supabaseService = require('../../services/supabase');
-const { ACTIVITY_TYPES } = require('./constants');
 
 async function submitToDB(from, session) {
   // Defensive: Ensure activities array exists
@@ -48,12 +45,24 @@ async function submitToDB(from, session) {
     const numFields = ['acres', 'expense_amount', 'quantity', 'fuel_used_litres', 'input_qty', 'seed_rate_per_acre'];
 
     intFields.forEach(f => {
-      if (act[f] !== undefined) act[f] = parseInt(act[f]) || null;
-      if (act.details && act.details[f] !== undefined) act.details[f] = parseInt(act.details[f]) || null;
+      if (act[f] !== undefined && act[f] !== null) {
+        const val = parseInt(act[f]);
+        act[f] = isNaN(val) ? null : val;
+      }
+      if (act.details && act.details[f] !== undefined && act.details[f] !== null) {
+        const val = parseInt(act.details[f]);
+        act.details[f] = isNaN(val) ? null : val;
+      }
     });
     numFields.forEach(f => {
-      if (act[f] !== undefined) act[f] = parseFloat(act[f]) || null;
-      if (act.details && act.details[f] !== undefined) act.details[f] = parseFloat(act.details[f]) || null;
+      if (act[f] !== undefined && act[f] !== null) {
+        const val = parseFloat(act[f]);
+        act[f] = isNaN(val) ? null : val;
+      }
+      if (act.details && act.details[f] !== undefined && act.details[f] !== null) {
+        const val = parseFloat(act.details[f]);
+        act.details[f] = isNaN(val) ? null : val;
+      }
     });
 
     // 5. Defensively enforce ENUM fields
@@ -83,11 +92,10 @@ async function submitToDB(from, session) {
 
   try {
     const saved = await supabaseService.saveDTSSubmission(payload);
-    await whatsappService.sendMessage(from, `✅ Daily Task Sheet Submitted successfully!\nReference ID: ${saved.submission_id}\n\nHave a good evening!`);
-    await sessionService.deleteSession(from);
+    return { success: true, submission_id: saved.submission_id };
   } catch (err) {
     console.error('Save Error:', err);
-    await whatsappService.sendMessage(from, `Failed to save to database. Error: ${err.message}`);
+    throw err;
   }
 }
 
