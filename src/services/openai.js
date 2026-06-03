@@ -159,6 +159,7 @@ async function callExtraction(userMessage, dbCache) {
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage }
     ],
+    max_tokens: 3000,
     temperature: 0.0,
     response_format: { type: 'json_object' }
   }), 'extraction');

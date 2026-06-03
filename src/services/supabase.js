@@ -267,6 +267,7 @@ async function deleteActivityEntry(entryId) {
   }
   return true;
 }
+<<<<<<< HEAD
 
 /**
  * Retrieve and format an existing DTS submission for user review.
@@ -392,6 +393,7 @@ async function findEmployeeByPhone(phoneNumber) {
     } : null
   };
 }
+
 
 module.exports = { 
   validateEmployeeCode,
