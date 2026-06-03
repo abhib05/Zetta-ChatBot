@@ -267,7 +267,6 @@ async function deleteActivityEntry(entryId) {
   }
   return true;
 }
-<<<<<<< HEAD
 
 /**
  * Retrieve and format an existing DTS submission for user review.
@@ -395,6 +394,35 @@ async function findEmployeeByPhone(phoneNumber) {
 }
 
 
+async function getDTSSubmission(submissionId) {
+  const { data, error } = await supabase
+    .from('dts_submissions')
+    .select(`
+      *,
+      dts_activity_entries (
+        *,
+        activity_types (name),
+        farm_plots (plot_code),
+        crops (crop_name),
+        dts_land_preparation_details (*),
+        dts_sowing_transplanting_details (*),
+        dts_irrigation_details (*),
+        dts_weeding_details (*),
+        dts_agri_input_details (*),
+        dts_other_machinery_details (*),
+        dts_harvest_details (*)
+      )
+    `)
+    .eq('submission_id', submissionId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error fetching full DTS submission:', error);
+    throw error;
+  }
+  return data;
+}
+
 module.exports = { 
   validateEmployeeCode,
   validateEmployeeFarmAccess,
@@ -407,5 +435,6 @@ module.exports = {
   deleteActivityEntry,
   getDTSSubmissionSummary,
   deleteDTSSubmission,
-  findEmployeeByPhone
+  findEmployeeByPhone,
+  getDTSSubmission
 };

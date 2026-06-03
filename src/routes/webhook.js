@@ -20,7 +20,7 @@ const crypto = require('crypto');
 const config = require('../config');
 const { handleIncomingMessage } = require('../handlers/conversation');
 const { sendMessage, markAsRead } = require('../services/whatsapp');
-const { markMessageProcessed, acquireLock, releaseLock } = require('../services/session');
+const { markMessageProcessed, acquireLock, releaseLock, getSession, setSession, createSession } = require('../services/session');
 
 // ─────────────────────────────────────────────
 // GET /webhook/whatsapp — Meta verification handshake
@@ -61,14 +61,12 @@ router.post('/whatsapp', async (req, res) => {
   }
 
   // ── ACK Meta immediately ───────────────────────────────────────
-  // Meta requires HTTP 200 within 20s or it retries.
   res.status(200).send('EVENT_RECEIVED');
 
   // ── Parse the Meta webhook payload ────────────────────────────
   try {
     const body = req.body;
 
-    // Safety check — only handle whatsapp_business_account events
     if (body.object !== 'whatsapp_business_account') return;
 
     const entry   = body.entry?.[0];
@@ -80,7 +78,6 @@ router.post('/whatsapp', async (req, res) => {
     const messages = value.messages;
     const statuses = value.statuses;
 
-    // ── Handle status updates (delivered, read) — log and ignore ──
     if (statuses && statuses.length > 0) {
       statuses.forEach((s) =>
         console.log(`📋 Status [${s.status}] for msg ${s.id} to ${s.recipient_id}`)
@@ -88,27 +85,25 @@ router.post('/whatsapp', async (req, res) => {
       return;
     }
 
-    // ── Handle actual incoming messages ───────────────────────────
     if (!messages || messages.length === 0) return;
 
     const message  = messages[0];
-    const from     = message.from;         // farmer's phone number (digits, no '+')
-    const msgId    = message.id;           // wamid — needed to mark as read
-    const msgType  = message.type;         // 'text', 'image', 'audio', 'document', etc.
+    const from     = message.from;
+    const msgId    = message.id;
+    const msgType  = message.type;
 
     if (!from) return;
 
-    // ── Check idempotency ──
+    // ── Check idempotency at Redis level ──
     const isNewMessage = await markMessageProcessed(msgId);
     if (!isNewMessage) {
-      console.log(`⏭️  Skipping duplicate message: ${msgId}`);
+      console.log(`⏭️  Skipping duplicate message (Redis): ${msgId}`);
       return;
     }
 
-    // Mark as read (shows blue ticks to farmer — good UX)
+    // Mark as read
     markAsRead(msgId).catch(() => {});
 
-    // ── Handle non-text messages ───────────────────────────────────
     if (msgType !== 'text') {
       console.log(`📎 Non-text message (${msgType}) from ${from} — ignoring`);
       sendMessage(from, 'I can only read text messages. Please type your daily report.')
@@ -117,7 +112,6 @@ router.post('/whatsapp', async (req, res) => {
     }
 
     const text = message.text?.body?.trim();
-
     if (!text) {
       console.warn(`⚠️  Empty text from ${from}`);
       return;
@@ -125,19 +119,73 @@ router.post('/whatsapp', async (req, res) => {
 
     console.log(`📱 [IN] ${from}: ${text}`);
 
-    // ── Check lock to prevent race condition ──
-    const locked = await acquireLock(from);
-    if (!locked) {
-      console.log(`🔒 Concurrent message skipped for ${from}: lock active.`);
-      return; // Could push to queue in future, but skip handles rapid-fire spam
+    // ── Retrieve or create session ──
+    let session = await getSession(from);
+    if (!session) {
+      session = await createSession(from);
     }
 
-    // ── Process the message asynchronously ────────────────────────
+    // Check message idempotency at session level
+    session.processed_message_ids = session.processed_message_ids || [];
+    if (session.processed_message_ids.includes(msgId)) {
+      console.log(`⏭️  Skipping duplicate message (Session): ${msgId}`);
+      return;
+    }
+
+    // Append to queue
+    session.message_queue = session.message_queue || [];
+    session.message_queue.push({ msgId, text, timestamp: Date.now() });
+    await setSession(from, session);
+
+    // ── Lock Check & Heartbeat Recovery ──
+    let locked = await acquireLock(from);
+    if (!locked) {
+      if (session.processing_started_at) {
+        const elapsed = Date.now() - new Date(session.processing_started_at).getTime();
+        if (elapsed > 30000) { // 30 seconds lock timeout
+          console.warn(`⚠️ Lock timeout detected for ${from} (elapsed: ${elapsed}ms). Recovering lock.`);
+          await releaseLock(from);
+          locked = await acquireLock(from);
+        }
+      }
+    }
+
+    if (!locked) {
+      console.log(`🔒 Concurrent message queued for ${from}: lock active.`);
+      return;
+    }
+
+    // ── FIFO Processing Loop ──
     try {
-      await handleIncomingMessage(from, text);
-    } catch (err) {
-      console.error(`Unhandled error processing message from ${from}:`, err);
+      while (true) {
+        session = await getSession(from);
+        if (!session || !session.message_queue || session.message_queue.length === 0) {
+          break;
+        }
+
+        const nextMsg = session.message_queue.shift();
+        session.processed_message_ids = session.processed_message_ids || [];
+        session.processed_message_ids.push(nextMsg.msgId);
+        if (session.processed_message_ids.length > 100) {
+          session.processed_message_ids.shift();
+        }
+        
+        session.processing_started_at = new Date().toISOString();
+        await setSession(from, session);
+
+        try {
+          await handleIncomingMessage(from, nextMsg.text);
+        } catch (err) {
+          console.error(`Unhandled error processing message from ${from}:`, err);
+        }
+      }
     } finally {
+      // Clear processing start time and release lock
+      session = await getSession(from);
+      if (session) {
+        session.processing_started_at = null;
+        await setSession(from, session);
+      }
       await releaseLock(from);
     }
 

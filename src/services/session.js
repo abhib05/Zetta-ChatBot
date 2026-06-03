@@ -77,28 +77,52 @@ async function createSession(phoneNumber) {
     farmId: null,
     farmCode: null,
     farmName: null,
+    employeeId: null,
+    employeeName: null,
+    employeeCode: null,
     
     // Enriched metadata
-    dbCache: { plots: [], allCrops: [], machines: [], employees: [], submittedToday: [] },
+    dbCache: { 
+      plots: [], 
+      allCrops: [], 
+      machines: [], 
+      employees: [], 
+      submittedToday: [],
+      lastRefreshed: null
+    },
     
     // Queue for Multi-Farm Reporting
     pendingFarmsQueue: [],
     
-    // LLM Orchestration State
-    conversationPhase: 'COLLECTING', // 'COLLECTING' | 'REVIEW' | 'CONFIRMED'
-    pendingTimeoutChoice: false,
+    // Explicit State Machine Fields
+    phase: 'COLLECTING', // 'COLLECTING' | 'CLARIFYING' | 'REVIEW_PENDING' | 'AWAITING_APPROVAL' | 'SUBMITTING' | 'COMPLETED'
+    submission_status: 'idle', // 'idle' | 'submitting' | 'failed' | 'completed'
+    submission_mode: 'draft', // 'draft' | 'amendment'
     
-    // Draft DTS
-    draft_dts_state: [],
-    draft_meta: {
-      deviation_notes: null,
-      next_day_plans: null,
-      agronomy_report: null
+    draft: {
+      activities: [],
+      meta: {
+        deviation_notes: null,
+        next_day_plans: null,
+        agronomy_report: null
+      }
     },
     
-    // Confirmed DTS
-    confirmed_dts_state: null,
-
+    pending_clarification: null, // { activity_id, field, question, asked_at }
+    review_metadata: {
+      hash: null,
+      generated_at: null
+    },
+    correction_context: {
+      activity_id: null,
+      expires_at: null,
+      recently_edited_fields: []
+    },
+    awaiting_approval: false,
+    processed_message_ids: [],
+    processing_started_at: null,
+    message_queue: [],
+    
     createdAt: new Date().toISOString(),
     lastActivity: new Date().toISOString(),
   };
