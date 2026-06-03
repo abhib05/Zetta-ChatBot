@@ -9,6 +9,7 @@ const whatsappService = require('../services/whatsapp');
 const supabaseService = require('../services/supabase');
 const openaiService = require('../services/openai');
 const toolHandlers = require('../llm/toolHandlers');
+const { ACTIVITY_TYPES } = require('./steps/constants');
 
 async function handleIncomingMessage(from, body) {
   if (!body || body.trim().length === 0) return;
@@ -66,7 +67,8 @@ async function handleIncomingMessage(from, body) {
       session.conversationPhase = 'COLLECTING';
       
       await sessionService.setSession(from, session);
-      await whatsappService.sendMessage(from, `Hey ${session.employeeName}, ${session.farmCode} is your farm code. Let's start your report. Please tell me what activities were done today.`);
+      const activityList = ACTIVITY_TYPES.map(a => a.label).join(', ');
+      await whatsappService.sendMessage(from, `Hey ${session.employeeName}, ${session.farmCode} is your farm code. Let's start your report.\n\nPlease tell me what activities were done today. You can report:\n${activityList}`);
       return;
     } else {
       // Multiple farms assigned — enter farm selection phase
@@ -161,10 +163,11 @@ async function handleIncomingMessage(from, body) {
     session.conversationPhase = 'COLLECTING';
     await sessionService.setSession(from, session);
 
+    const activityList = ACTIVITY_TYPES.map(a => a.label).join(', ');
     if (matchedFarms.length > 1) {
-      await whatsappService.sendMessage(from, `Got it. Let's go one at a time!\nStarting with *${session.farmCode}* (${session.farmName}) first. Please report your activities.`);
+      await whatsappService.sendMessage(from, `Got it. Let's go one at a time!\nStarting with *${session.farmCode}* (${session.farmName}) first. Please report your activities. You can report:\n${activityList}`);
     } else {
-      await whatsappService.sendMessage(from, `Got it. Reporting for *${session.farmCode}* (${session.farmName}) today. Please report your activities.`);
+      await whatsappService.sendMessage(from, `Got it. Reporting for *${session.farmCode}* (${session.farmName}) today. Please report your activities. You can report:\n${activityList}`);
     }
     return;
   }
@@ -305,6 +308,8 @@ async function handleIncomingMessage(from, body) {
           result = toolHandlers.remove_draft_activity(session, args);
         } else if (name === 'clear_draft_fields') {
           result = toolHandlers.clear_draft_fields(session, args);
+        } else if (name === 'update_draft_metadata') {
+          result = toolHandlers.update_draft_metadata(session, args);
         } else {
           result = { error: `Tool ${name} not found.` };
         }
@@ -360,7 +365,8 @@ async function handleIncomingMessage(from, body) {
 
         session.conversationPhase = 'COLLECTING';
         await sessionService.setSession(from, session);
-        await whatsappService.sendMessage(from, `ZF submission complete! Now let's report for the next queued farm: *${session.farmCode}* (${session.farmName}). Please report your activities for today.`);
+        const activityList = ACTIVITY_TYPES.map(a => a.label).join(', ');
+        await whatsappService.sendMessage(from, `ZF submission complete! Now let's report for the next queued farm: *${session.farmCode}* (${session.farmName}). Please report your activities for today. You can report:\n${activityList}`);
         return;
       } else {
         // No more farms, send final message and delete session

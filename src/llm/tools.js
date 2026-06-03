@@ -204,6 +204,30 @@ const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'update_draft_metadata',
+      description: 'Record general notes, plans, or observations that do not fit into a specific activity record (e.g. next day plans, weather notes, general deviations).',
+      parameters: {
+        type: 'object',
+        properties: {
+          deviation_notes: {
+            type: 'string',
+            description: 'Any general deviations from the plan or unexpected events on the farm.'
+          },
+          next_day_plans: {
+            type: 'string',
+            description: 'Plans or tasks scheduled for the next day.'
+          },
+          agronomy_report: {
+            type: 'string',
+            description: 'General observations about crop health, weather conditions, pests, etc.'
+          }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'generate_review_summary',
       description: 'Generate a formatted final review summary text of the draft sheet to display to the user.',
       parameters: {

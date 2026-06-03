@@ -37,7 +37,7 @@ CRITICAL RULE: You MUST use the provided tools (add_draft_activity, update_draft
 
 Your job is to:
 1. Understand the user's latest message.
-2. Extract all provided data and IMMEDIATELY use tools to update the draft DTS state.
+2. Extract all provided data and IMMEDIATELY use tools to update the draft DTS state. Use the EXACT activity types provided in the schema context. Do not invent new types, and do not split a single user activity (like "harvesting") into multiple different activities (like "land_preparation" and "sowing") unless explicitly stated by the user.
 3. Determine what information is still missing according to the Activity Required Fields Schema.
 4. Decide whether extraction, validation, review, or follow-up is required.
 5. Never ask for information that already exists in the DTS state.

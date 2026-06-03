@@ -170,6 +170,27 @@ function clear_draft_fields(session, args) {
 }
 
 /**
+ * Update general metadata for the draft (notes, plans, agronomy report).
+ */
+function update_draft_metadata(session, args) {
+  if (!session.draft_meta) {
+    session.draft_meta = { deviation_notes: null, next_day_plans: null, agronomy_report: null };
+  }
+
+  const { deviation_notes, next_day_plans, agronomy_report } = args;
+  
+  if (deviation_notes !== undefined) session.draft_meta.deviation_notes = deviation_notes;
+  if (next_day_plans !== undefined) session.draft_meta.next_day_plans = next_day_plans;
+  if (agronomy_report !== undefined) session.draft_meta.agronomy_report = agronomy_report;
+
+  return {
+    success: true,
+    message: 'Updated draft metadata.',
+    metadata: session.draft_meta
+  };
+}
+
+/**
  * Confirm grouping decision for multi-plot activity.
  */
 function confirm_plot_grouping(session, args) {
@@ -502,6 +523,7 @@ module.exports = {
   update_draft_dts,
   remove_draft_activity,
   clear_draft_fields,
+  update_draft_metadata,
   confirm_plot_grouping,
   validate_draft,
   generate_review_summary,

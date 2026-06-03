@@ -190,7 +190,7 @@ function buildSchemaContext() {
     const optional = schema.optionalFields.length
       ? ` | optional: ${schema.optionalFields.join(', ')}`
       : '';
-    return `  ${type}: required=[${required}]${optional}`;
+    return `  - ${type} (aka ${schema.label}): required=[${required}]${optional}`;
   });
   return lines.join('\n');
 }
