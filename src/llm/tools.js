@@ -33,6 +33,10 @@ const TOOLS = [
             type: 'number',
             description: 'Acres of land covered.'
           },
+          acres_is_estimate: {
+            type: 'boolean',
+            description: 'Set to true if the user cannot provide an exact acres value and is estimating it.'
+          },
           labour_count: {
             type: 'integer',
             description: 'Number of laborers engaged.'
@@ -113,6 +117,7 @@ const TOOLS = [
               },
               crop_name: { type: 'string' },
               acres: { type: 'number' },
+              acres_is_estimate: { type: 'boolean' },
               labour_count: { type: 'integer' },
               duration_minutes: { type: 'integer' },
               expense_amount: { type: 'number' },

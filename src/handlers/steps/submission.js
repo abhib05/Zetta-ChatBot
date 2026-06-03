@@ -1,5 +1,3 @@
-const sessionService = require('../../services/session');
-const whatsappService = require('../../services/whatsapp');
 const supabaseService = require('../../services/supabase');
 
 async function submitToDB(from, session) {
@@ -94,11 +92,10 @@ async function submitToDB(from, session) {
 
   try {
     const saved = await supabaseService.saveDTSSubmission(payload);
-    await whatsappService.sendMessage(from, `✅ Daily Task Sheet Submitted successfully!\nReference ID: ${saved.submission_id}\n\nHave a good evening!`);
-    await sessionService.deleteSession(from);
+    return { success: true, submission_id: saved.submission_id };
   } catch (err) {
     console.error('Save Error:', err);
-    await whatsappService.sendMessage(from, `Failed to save to database. Error: ${err.message}`);
+    throw err;
   }
 }
 

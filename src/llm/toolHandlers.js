@@ -3,9 +3,13 @@
  * 
  * Implements the logic for all tools called by the LLM orchestrator.
  * Modifies the session state and returns a structured output to the LLM.
+ *
+ * Required fields per activity type are read exclusively from:
+ *   src/config/activitySchema.js  ← single source of truth
+ * Do NOT add hardcoded field lists here.
  */
 
-const { EXPECTED_DETAILS } = require('../handlers/steps/constants');
+const { ACTIVITY_SCHEMA } = require('../config/activitySchema');
 const submissionService = require('../handlers/steps/submission');
 const openaiService = require('../services/openai');
 
@@ -35,6 +39,7 @@ function add_draft_activity(session, args) {
     plot_names: plotNames,
     crop_name: args.crop_name || null,
     acres: args.acres !== undefined ? args.acres : null,
+    acres_is_estimate: args.acres_is_estimate === true, // true when user gave an estimate rather than exact value
     labour_count: args.labour_count !== undefined ? args.labour_count : null,
     duration_minutes: args.duration_minutes !== undefined ? args.duration_minutes : null,
     expense_amount: args.expense_amount !== undefined ? args.expense_amount : null,
@@ -86,7 +91,11 @@ function update_draft_dts(session, args) {
   }
 
   // Update rest of the fields
-  const allowedFields = ['crop_name', 'acres', 'labour_count', 'duration_minutes', 'expense_amount', 'remarks'];
+  const allowedFields = [
+    'activity_type_name', 'crop_name',
+    'acres', 'acres_is_estimate',
+    'labour_count', 'duration_minutes', 'expense_amount', 'remarks'
+  ];
   allowedFields.forEach(f => {
     if (fields[f] !== undefined) {
       activity[f] = fields[f];
@@ -214,7 +223,14 @@ function confirm_plot_grouping(session, args) {
 }
 
 /**
- * Validate current draft state using programmatic rules and LLM hook.
+ * Validate current draft state against the central ACTIVITY_SCHEMA.
+ *
+ * Rules:
+ * - Required fields are read ONLY from ACTIVITY_SCHEMA (src/config/activitySchema.js).
+ * - Each activity type has its own baseFields and detailFields — no global assumptions.
+ * - acres is required for all activity types.
+ * - labour_count / duration_minutes are only required where the schema lists them.
+ * - crop_name is only required where the schema lists it in baseFields.
  */
 async function validate_draft(session) {
   const result = {
@@ -230,14 +246,21 @@ async function validate_draft(session) {
     return result;
   }
 
-  // 1. Programmatic Rule-Based Validation
   for (const act of session.draft_dts_state) {
-    // Check plot presence & grouping
+
+    // ── 1. Resolve schema for this activity type ─────────────────────────
+    const schema = ACTIVITY_SCHEMA[act.activity_type_name];
+    if (!schema) {
+      result.valid = false;
+      result.errors.push(`Unknown activity type: "${act.activity_type_name}". Cannot validate.`);
+      continue;
+    }
+
+    // ── 2. Plot presence & grouping check ────────────────────────────────
     if (!act.plot_names || act.plot_names.length === 0) {
       result.valid = false;
       result.missing_fields.push({ activityId: act.id, field: 'plot_names', type: act.activity_type_name });
     } else if (act.plot_names.length > 1 && act.same_work_confirmed === null) {
-      // Grouping check is pending!
       result.valid = false;
       result.grouping_checks.push({
         activityId: act.id,
@@ -246,24 +269,34 @@ async function validate_draft(session) {
       });
     }
 
-    // Check plot validity against farm plots cache
+    // ── 3. Plot validity against farm cache ──────────────────────────────
     const validPlots = session.dbCache.plots || [];
     const invalidPlots = [];
-    if (act.plot_names) {
+    if (act.plot_names && act.plot_names.length > 0) {
       act.plot_names.forEach(plotName => {
         const found = validPlots.find(p => p.plot_code.toLowerCase() === plotName.toLowerCase());
         if (!found) {
           invalidPlots.push(plotName);
         } else {
-          // Check sowing transplanting conflicts
+          // Sowing conflict: plot already has an active crop
           if (act.activity_type_name === 'sowing_transplanting' && found.current_crop_id) {
             result.valid = false;
-            result.errors.push(`Plot ${plotName} already has a crop assigned in the database.`);
+            result.errors.push(`Plot ${plotName} already has a crop assigned. Cannot sow until harvested.`);
+          }
+          
+          // No crop present conflict: activity needs a crop, but plot has none
+          if (act.activity_type_name !== 'sowing_transplanting' && schema.baseFields.includes('crop_name')) {
+             if (!found.current_crop_id) {
+               result.valid = false;
+               result.errors.push(`Plot ${plotName} currently does not have any crop registered in the database. Please verify the plot name, or report Sowing/Transplanting first.`);
+             }
           }
 
-          // Check daily duplicates
+          // Daily duplicate check
           const duplicates = session.dbCache.submittedToday || [];
-          const dup = duplicates.find(d => d.plot_id === found.plot_id && d.activity_type_name === act.activity_type_name);
+          const dup = duplicates.find(
+            d => d.plot_id === found.plot_id && d.activity_type_name === act.activity_type_name
+          );
           if (dup) {
             result.valid = false;
             result.errors.push(`A ${act.activity_type_name} report has already been submitted for Plot ${plotName} today.`);
@@ -271,43 +304,39 @@ async function validate_draft(session) {
         }
       });
     }
-
     if (invalidPlots.length > 0) {
       result.valid = false;
       result.errors.push(`Plot(s) [${invalidPlots.join(', ')}] are not assigned to farm ${session.farmCode}.`);
     }
 
-    // Check base fields
-    ['labour_count', 'duration_minutes'].forEach(field => {
-      if (act[field] === null || act[field] === undefined) {
+    // ── 4. Schema-driven base field checks (excluding plot_names — handled above) ──
+    const baseFieldsToCheck = schema.baseFields.filter(f => f !== 'plot_names');
+    baseFieldsToCheck.forEach(field => {
+      const val = act[field];
+      if (val === null || val === undefined || val === '') {
         result.valid = false;
         result.missing_fields.push({ activityId: act.id, field, type: act.activity_type_name });
       }
     });
 
-    // Check crop presence
-    if (!act.crop_name) {
-      result.valid = false;
-      result.missing_fields.push({ activityId: act.id, field: 'crop_name', type: act.activity_type_name });
-    }
-
-    // Check detail fields
-    const expectedKeys = EXPECTED_DETAILS[act.activity_type_name] || [];
+    // ── 5. Schema-driven detail field checks ─────────────────────────────
     if (!act.details) act.details = {};
-    expectedKeys.forEach(key => {
-      if (act.details[key] === null || act.details[key] === undefined) {
+    schema.detailFields.forEach(key => {
+      const val = act.details[key];
+      if (val === null || val === undefined || val === '') {
         result.valid = false;
         result.missing_fields.push({ activityId: act.id, field: `details.${key}`, type: act.activity_type_name });
       }
     });
 
-    // Mark activity completion status
-    const hasMissingForAct = result.missing_fields.some(m => m.activityId === act.id) || 
-                             result.grouping_checks.some(g => g.activityId === act.id);
+    // ── 6. Mark activity completion ──────────────────────────────────────
+    const hasMissingForAct =
+      result.missing_fields.some(m => m.activityId === act.id) ||
+      result.grouping_checks.some(g => g.activityId === act.id);
     act._complete = !hasMissingForAct;
   }
 
-  // 2. Call Validation Layer LLM Hook for corrections/normalization suggestions
+  // ── 7. LLM validation hook (only runs after programmatic checks pass) ──
   if (result.valid) {
     try {
       const llmValidation = await openaiService.callValidation(session.draft_dts_state, session.dbCache);
@@ -392,33 +421,64 @@ async function generate_review_summary(session) {
 
 /**
  * Confirm and submit the DTS to the database.
- * Expands multi-plot grouped activities into individual rows.
+ *
+ * Pre-conditions:
+ *  1. All required fields defined by ACTIVITY_SCHEMA must be present (hard block).
+ *  2. Multi-plot grouped activities are expanded into one record per plot.
+ *  3. If acres_is_estimate is true on any activity, an estimate note is appended
+ *     to that activity's remarks field before database insertion.
  */
 async function submit_dts(phoneNumber, session) {
   if (!session.draft_dts_state || session.draft_dts_state.length === 0) {
     return { success: false, message: 'No draft state found to submit.' };
   }
 
-  // 1. Expand multi-plot grouped activities into individual records
+  // ── 1. Pre-submission schema validation guard ────────────────────────────
+  // Submission is BLOCKED if any required field is missing.
+  // The review screen and database call are never reached with incomplete data.
+  const validation = await validate_draft(session);
+  if (!validation.valid) {
+    const missingCount = validation.missing_fields.length;
+    const errorCount = validation.errors.length;
+    console.warn(`[submit_dts] Blocked — ${missingCount} missing field(s), ${errorCount} error(s).`);
+    return {
+      success: false,
+      blocked: true,
+      message: `Submission blocked: ${missingCount} required field(s) are still missing across activities. Please complete all fields before submitting.`,
+      missing_fields: validation.missing_fields,
+      errors: validation.errors
+    };
+  }
+
+  // ── 2. Expand multi-plot grouped activities into individual records ───────
   const expandedActivities = [];
   for (const act of session.draft_dts_state) {
     if (act.plot_names && act.plot_names.length > 1) {
-      // Grouped plots -> expand to separate entries
+      // Grouped plots → one record per plot
       act.plot_names.forEach(plotName => {
-        expandedActivities.push({
-          ...act,
-          plot_name: plotName, // submitToDB expects plot_name
-        });
+        const expanded = { ...act, plot_name: plotName };
+        if (act.acres_is_estimate) {
+          expanded.remarks = expanded.remarks
+            ? `${expanded.remarks} (acres is an estimate)`
+            : '(acres is an estimate)';
+        }
+        expandedActivities.push(expanded);
       });
     } else {
-      expandedActivities.push({
+      const expanded = {
         ...act,
         plot_name: act.plot_names && act.plot_names.length > 0 ? act.plot_names[0] : null
-      });
+      };
+      if (act.acres_is_estimate) {
+        expanded.remarks = expanded.remarks
+          ? `${expanded.remarks} (acres is an estimate)`
+          : '(acres is an estimate)';
+      }
+      expandedActivities.push(expanded);
     }
   }
 
-  // 2. Set confirmed state
+  // ── 3. Commit confirmed state ─────────────────────────────────────────────
   session.confirmed_dts_state = {
     activities: expandedActivities,
     deviation_notes: session.draft_meta?.deviation_notes || null,
@@ -426,12 +486,12 @@ async function submit_dts(phoneNumber, session) {
     agronomy_report: session.draft_meta?.agronomy_report || null
   };
 
-  // Set parsedJSON so submitToDB works unchanged
+  // parsedJSON is the format expected by submitToDB
   session.parsedJSON = session.confirmed_dts_state;
 
   try {
-    await submissionService.submitToDB(phoneNumber, session);
-    return { success: true, message: 'DTS submitted successfully!' };
+    const res = await submissionService.submitToDB(phoneNumber, session);
+    return { success: true, message: 'DTS submitted successfully!', submission_id: res.submission_id };
   } catch (err) {
     return { success: false, message: `Submission failed: ${err.message}` };
   }

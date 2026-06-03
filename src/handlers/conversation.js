@@ -55,6 +55,14 @@ async function handleIncomingMessage(from, body) {
       session.farmCode = farm.farm_code;
       session.farmName = farm.farm_name;
       session.dbCache = await supabaseService.getFarmDetails(farm.farm_id);
+      
+      if (session.dbCache.submission_id) {
+        session.conversationPhase = 'DUPLICATE_CHECK';
+        await sessionService.setSession(from, session);
+        await whatsappService.sendMessage(from, `Hey ${session.employeeName}, you have already submitted a report for ${session.farmCode} today.\n\nDo you want to *check* the submitted report or *overwrite* a new report? (Reply Check / Overwrite)`);
+        return;
+      }
+
       session.conversationPhase = 'COLLECTING';
       
       await sessionService.setSession(from, session);
@@ -102,7 +110,7 @@ async function handleIncomingMessage(from, body) {
       await sessionService.deleteSession(from);
       await whatsappService.sendMessage(from, "Starting a new report.");
       // Re-trigger auth for new session
-      return handleIncomingMessage(from, body);
+      return handleIncomingMessage(from, "hi");
     } else {
       await whatsappService.sendMessage(from, "Please reply *Resume* to continue your previous report, or *New* to start a new one.");
       return;
@@ -111,31 +119,15 @@ async function handleIncomingMessage(from, body) {
 
   // 5. Handle Farm Selection Phase (Multi-Farm Routing)
   if (session.conversationPhase === 'FARM_SELECTION') {
+    const selectedCodes = await openaiService.callFarmSelection(msg, session.availableFarms);
+    
     const matchedFarms = [];
-    const textUpper = msg.toUpperCase();
-
-    // Match by code/name
-    session.availableFarms.forEach(f => {
-      const code = f.farm_code.toUpperCase();
-      const name = f.farm_name.toUpperCase();
-      if (textUpper.includes(code) || textUpper.includes(name)) {
+    selectedCodes.forEach(code => {
+      const f = session.availableFarms.find(farm => farm.farm_code === code);
+      if (f && !matchedFarms.some(existing => existing.farm_id === f.farm_id)) {
         matchedFarms.push(f);
       }
     });
-
-    // Fallback: match index numbers
-    const numberMatches = textUpper.match(/\b\d+\b/g);
-    if (numberMatches && matchedFarms.length === 0) {
-      numberMatches.forEach(numStr => {
-        const idx = parseInt(numStr) - 1;
-        if (idx >= 0 && idx < session.availableFarms.length) {
-          const farm = session.availableFarms[idx];
-          if (!matchedFarms.some(f => f.farm_id === farm.farm_id)) {
-            matchedFarms.push(farm);
-          }
-        }
-      });
-    }
 
     if (matchedFarms.length === 0) {
       let errorMsg = `Could not match any farm code. Please reply with one or more of the assigned Farm Codes:\n`;
@@ -152,22 +144,94 @@ async function handleIncomingMessage(from, body) {
     session.farmCode = activeFarm.farm_code;
     session.farmName = activeFarm.farm_name;
     session.dbCache = await supabaseService.getFarmDetails(activeFarm.farm_id);
-    session.conversationPhase = 'COLLECTING';
-
+    
     if (matchedFarms.length > 1) {
       session.pendingFarmsQueue = matchedFarms.slice(1);
-      await sessionService.setSession(from, session);
-      await whatsappService.sendMessage(from, `Got it. Let's go one at a time!\nStarting with *${session.farmCode}* (${session.farmName}) first. Please report your activities.`);
-      return;
     } else {
       session.pendingFarmsQueue = [];
+    }
+
+    if (session.dbCache.submission_id) {
+      session.conversationPhase = 'DUPLICATE_CHECK';
       await sessionService.setSession(from, session);
+      await whatsappService.sendMessage(from, `Starting with *${session.farmCode}* (${session.farmName}).\n\n⚠️ You have already submitted a report for this farm today.\n\nDo you want to *check* the submitted report or *overwrite* a new report? (Reply Check / Overwrite)`);
+      return;
+    }
+
+    session.conversationPhase = 'COLLECTING';
+    await sessionService.setSession(from, session);
+
+    if (matchedFarms.length > 1) {
+      await whatsappService.sendMessage(from, `Got it. Let's go one at a time!\nStarting with *${session.farmCode}* (${session.farmName}) first. Please report your activities.`);
+    } else {
       await whatsappService.sendMessage(from, `Got it. Reporting for *${session.farmCode}* (${session.farmName}) today. Please report your activities.`);
+    }
+    return;
+  }
+
+  // 6. Handle Duplicate Check States
+  if (session.conversationPhase === 'DUPLICATE_CHECK') {
+    if (lowerMsg.includes('check')) {
+      const summary = await supabaseService.getDTSSubmissionSummary(session.dbCache.submission_id);
+      session.conversationPhase = 'DUPLICATE_CHECK_POST_REVIEW';
+      await sessionService.setSession(from, session);
+      await whatsappService.sendMessage(from, summary);
+      await whatsappService.sendMessage(from, `Do you want to *submit a new report* or *end* the chat? (Reply New / End)`);
+      return;
+    } else if (lowerMsg.includes('overwrite') || lowerMsg.includes('new')) {
+      session.conversationPhase = 'OVERWRITE_CONFIRMATION';
+      await sessionService.setSession(from, session);
+      await whatsappService.sendMessage(from, `Do you really want to delete the existing report? (Reply YES or NO)`);
+      return;
+    } else {
+      await whatsappService.sendMessage(from, `Please reply *Check* to view the existing report, or *Overwrite* to start a new one.`);
       return;
     }
   }
 
-  // 6. Handle Plot Grouping Confirmation (Yes/No if multiple plots were entered)
+  if (session.conversationPhase === 'DUPLICATE_CHECK_POST_REVIEW') {
+    if (lowerMsg.includes('submit') || lowerMsg.includes('new')) {
+      session.conversationPhase = 'OVERWRITE_CONFIRMATION';
+      await sessionService.setSession(from, session);
+      await whatsappService.sendMessage(from, `Do you really want to delete the existing report? (Reply YES or NO)`);
+      return;
+    } else if (lowerMsg.includes('end') || lowerMsg.includes('no')) {
+      await whatsappService.sendMessage(from, `Thank you. Have a good day!`);
+      await sessionService.deleteSession(from);
+      return;
+    } else {
+      await whatsappService.sendMessage(from, `Please reply *New* to submit a new report, or *End* to close the chat.`);
+      return;
+    }
+  }
+
+  if (session.conversationPhase === 'OVERWRITE_CONFIRMATION') {
+    if (lowerMsg === 'yes' || lowerMsg === 'y') {
+      const summary = await supabaseService.getDTSSubmissionSummary(session.dbCache.submission_id);
+      await whatsappService.sendMessage(from, summary);
+      await whatsappService.sendMessage(from, `Deleting the existing report...`);
+      await supabaseService.deleteDTSSubmission(session.dbCache.submission_id);
+      
+      session.conversationPhase = 'COLLECTING';
+      session.dbCache.submission_id = null;
+      session.dbCache.submittedToday = [];
+      await sessionService.setSession(from, session);
+      
+      await whatsappService.sendMessage(from, `Deleted. Let's start fresh. Please tell me what activities you have done today.`);
+      return;
+    } else if (lowerMsg === 'no' || lowerMsg === 'n') {
+      const summary = await supabaseService.getDTSSubmissionSummary(session.dbCache.submission_id);
+      await whatsappService.sendMessage(from, summary);
+      await whatsappService.sendMessage(from, `Thank you. Keeping the existing report. Have a good day!`);
+      await sessionService.deleteSession(from);
+      return;
+    } else {
+      await whatsappService.sendMessage(from, `Do you really want to delete the existing report? (Please reply YES or NO)`);
+      return;
+    }
+  }
+
+  // 7. Handle Plot Grouping Confirmation (Yes/No if multiple plots were entered)
   if (session.pendingGroupConflict) {
     const conflict = session.pendingGroupConflict;
     if (lowerMsg === 'yes' || lowerMsg === 'y' || lowerMsg.includes('same')) {
@@ -177,7 +241,7 @@ async function handleIncomingMessage(from, body) {
       });
       session.pendingGroupConflict = null;
       await sessionService.setSession(from, session);
-      await whatsappService.sendMessage(from, `Understood. Grouped activity for ${conflict.plots.join(', ')} confirmed. Let's continue.`);
+      await whatsappService.sendMessage(from, `Understood. Grouped activity for ${conflict.plot_names.join(', ')} confirmed. Let's continue.`);
       // Re-trigger loop with empty text to run validator
       return handleIncomingMessage(from, " ");
     } else if (lowerMsg === 'no' || lowerMsg === 'n' || lowerMsg.includes('different') || lowerMsg.includes('separate')) {
@@ -191,7 +255,7 @@ async function handleIncomingMessage(from, body) {
       // Re-trigger loop with empty text to run validator
       return handleIncomingMessage(from, " ");
     } else {
-      await whatsappService.sendMessage(from, `Did you do the *same* work across all these plots (${conflict.plots.join(', ')})? (Please reply YES or NO)`);
+      await whatsappService.sendMessage(from, `Did you do the *same* work across all these plots (${conflict.plot_names.join(', ')})? (Please reply YES or NO)`);
       return;
     }
   }
@@ -255,7 +319,10 @@ async function handleIncomingMessage(from, body) {
     }
 
     // 8. Handle Post-Execution State & Validation Check
-    const validationResult = await toolHandlers.validate_draft(session);
+    let validationResult = toolResults.find(tr => tr.toolCall.function.name === 'validate_draft')?.result;
+    if (!validationResult) {
+      validationResult = await toolHandlers.validate_draft(session);
+    }
 
     // If validation shows a grouping choice is pending, ask the user and yield
     if (validationResult.grouping_checks && validationResult.grouping_checks.length > 0) {
@@ -279,17 +346,26 @@ async function handleIncomingMessage(from, body) {
         session.farmCode = nextFarm.farm_code;
         session.farmName = nextFarm.farm_name;
         session.dbCache = await supabaseService.getFarmDetails(nextFarm.farm_id);
-        session.conversationPhase = 'COLLECTING';
         session.draft_dts_state = [];
         session.draft_meta = { deviation_notes: null, next_day_plans: null, agronomy_report: null };
         session.confirmed_dts_state = null;
         session.lastActivity = new Date().toISOString();
 
+        if (session.dbCache.submission_id) {
+          session.conversationPhase = 'DUPLICATE_CHECK';
+          await sessionService.setSession(from, session);
+          await whatsappService.sendMessage(from, `✅ Farm submitted! Next up is *${session.farmCode}* (${session.farmName}).\n\n⚠️ You have already submitted a report for this farm today.\n\nDo you want to *check* the submitted report or *overwrite* a new report? (Reply Check / Overwrite)`);
+          return;
+        }
+
+        session.conversationPhase = 'COLLECTING';
         await sessionService.setSession(from, session);
         await whatsappService.sendMessage(from, `ZF submission complete! Now let's report for the next queued farm: *${session.farmCode}* (${session.farmName}). Please report your activities for today.`);
         return;
       } else {
-        // No more farms, session is cleaned up in toolHandlers.submit_dts/submission.js, return
+        // No more farms, send final message and delete session
+        await whatsappService.sendMessage(from, `✅ All Daily Task Sheets submitted successfully!\n\nHave a good evening!`);
+        await sessionService.deleteSession(from);
         return;
       }
     }

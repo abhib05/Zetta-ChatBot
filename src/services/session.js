@@ -127,11 +127,11 @@ async function acquireLock(phoneNumber) {
   const key = `lock:${phoneNumber}`;
   try {
     const client = getClient();
-    const isNew = await client.set(key, '1', 'NX', 'EX', 15);
+    const isNew = await client.set(key, '1', 'NX', 'EX', 60);
     return !!isNew;
   } catch {
     if (memStore.has(key)) return false;
-    memStore.set(key, '1', { ttl: 15 * 1000 });
+    memStore.set(key, '1', { ttl: 60 * 1000 });
     return true;
   }
 }
